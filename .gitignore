@@ -1,0 +1,34 @@
+# --- audio: copyrighted and/or large - NEVER commit ---
+*.flac
+*.wav
+*.mp3
+*.m4a
+*.aac
+*.ogg
+*.opus
+*.wma
+*.mkv
+*.mp4
+
+# --- downloaded tool packages / archives ---
+*.zip
+*.7z
+
+# --- third-party binaries + the split venv + models (download/install separately, see README) ---
+/bin/
+
+# --- generated output + working folders ---
+Final_5.1/
+Final_7.1/
+Final_7.1.2/
+SurroundUpmix_work/
+testsongs/
+_*/
+
+# --- python ---
+__pycache__/
+*.pyc
+
+# --- local / editor / session ---
+.claude/
+*.tmp
