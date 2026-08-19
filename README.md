@@ -76,6 +76,8 @@ No SoX, no CenterCutCL, no platform lock-in — it runs anywhere Python does.
 
 ## Usage
 
+**GUI (dark mode)** — double-click `SurroundUpmix-GUI.bat` on Windows, or run `python gui.py` anywhere. Pick a song (or a stems folder), choose format/preset, hit **Start**; the log streams live while it renders. Tkinter ships with Python, so no extra install.
+
 **Full chain — song → surround:**
 ```bash
 python allinone.py "song.flac" --format 7.1.2 --preset immersive --device cuda
@@ -86,7 +88,7 @@ python allinone.py "song.flac" --format 7.1.2 --preset immersive --device cuda
 python upmix.py "stems/song" --format 5.1 --preset focus
 ```
 
-Run either with `-h` for every option.
+Run either CLI with `-h` for every option.
 
 ---
 
@@ -122,6 +124,8 @@ surroundupmix/          # the engine (a normal Python package)
   engine.py             # end-to-end upmix_folder()
 upmix.py                # CLI: stems folder → surround
 allinone.py             # CLI: song → Demucs → (split) → surround
+gui.py                  # dark-mode Tkinter GUI (drives both CLIs)
+SurroundUpmix-GUI.bat   # double-click launcher for the GUI (Windows)
 split_vocals.py         # lead/backing Roformer karaoke split (used by allinone)
 tests/test_engine.py    # synthetic-signal tests (physics, no audio needed)
 legacy/                 # the v1 PowerShell engine (SoX + CenterCutCL)
