@@ -6,3 +6,4 @@ soundfile>=0.12
 # Separation (full chain, allinone.py) - install separately, see README:
 #   pip install -U demucs
 #   pip install audio-separator onnxruntime   (optional lead/backing split)
+#   pip install tkinterdnd2                    (optional GUI drag & drop)

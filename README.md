@@ -68,6 +68,7 @@ For the full chain (`allinone.py`):
 pip install -U demucs                     # AI stem separation
 # NVIDIA GPU: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
 pip install audio-separator onnxruntime   # optional: lead/backing karaoke split
+pip install tkinterdnd2                    # optional: drag & drop onto the GUI
 ```
 
 No SoX, no CenterCutCL, no platform lock-in — it runs anywhere Python does.
@@ -76,7 +77,7 @@ No SoX, no CenterCutCL, no platform lock-in — it runs anywhere Python does.
 
 ## Usage
 
-**GUI (dark mode)** — double-click `SurroundUpmix-GUI.bat` on Windows, or run `python gui.py` anywhere. Pick a song (or a stems folder), choose format/preset, hit **Start**; the log streams live while it renders. Tkinter ships with Python, so no extra install.
+**GUI (dark mode, batch queue)** — double-click `SurroundUpmix-GUI.bat` on Windows, or run `python gui.py` anywhere. **Drag songs or whole folders onto the window** (or use *Add files / Add folder*) — each drop is auto-classified into a queue: a folder of Demucs stems becomes one job, any other folder is scanned for audio and each track becomes a job, and files become jobs. Set format/preset once (applied to every job), hit **Start queue**, and the jobs render one after another with a live per-row status and log. Tkinter ships with Python; OS drag & drop additionally needs `pip install tkinterdnd2` (without it, the Add buttons still fill the queue).
 
 **Full chain — song → surround:**
 ```bash
@@ -121,6 +122,7 @@ surroundupmix/          # the engine (a normal Python package)
   routing.py            # stem → channels (direct front, ambient wrap)
   balance.py            # LFE, front/rear auto-balance, normalise
   presets.py            # the presets
+  inputs.py             # expand dropped paths → song/stems jobs (GUI queue)
   engine.py             # end-to-end upmix_folder()
 upmix.py                # CLI: stems folder → surround
 allinone.py             # CLI: song → Demucs → (split) → surround

@@ -22,6 +22,7 @@ from surroundupmix.layouts import LAYOUTS, channel_mask
 from surroundupmix import decompose as dc
 from surroundupmix.detect import classify_vocal_width
 from surroundupmix.engine import upmix_folder
+from surroundupmix.inputs import expand_inputs, looks_like_stems
 
 SR = 44100
 
@@ -171,6 +172,48 @@ def test_auto_balance_hits_target():
         rear = np.concatenate([x[:, idx[c]] for c in ("BL", "BR", "SL", "SR")])
         # rear field should sit roughly 16 dB under the front (within a few dB)
         assert -24 < _db(rear, front) < -10
+
+
+# ----------------------------------------------------------------- input expand
+def _touch(*parts):
+    p = os.path.join(*parts)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    open(p, "w").close()
+    return p
+
+
+def test_expand_files_folders_and_stems():
+    with tempfile.TemporaryDirectory() as d:
+        _touch(d, "a.flac")
+        _touch(d, "b.mp3")
+        _touch(d, "notes.txt")            # ignored (not audio)
+        _touch(d, "album", "c.wav")       # nested song
+        for s in ("bass", "drums", "vocals", "other"):
+            _touch(d, "song_stems", s + ".flac")
+        _touch(d, "Final_7.1", "x_7.1.flac")   # output -> must be skipped
+
+        assert looks_like_stems(os.path.join(d, "song_stems"))
+        assert not looks_like_stems(d)
+
+        # single file -> one song
+        j = expand_inputs([os.path.join(d, "a.flac")])
+        assert j == [(os.path.normpath(os.path.join(d, "a.flac")), "song")]
+
+        # stems folder -> one stems job
+        j = expand_inputs([os.path.join(d, "song_stems")])
+        assert j == [(os.path.normpath(os.path.join(d, "song_stems")), "stems")]
+
+        # whole tree -> songs + detected stems, output/non-audio skipped
+        j = expand_inputs([d])
+        kinds = {os.path.basename(p): k for p, k in j}
+        assert kinds.get("a.flac") == "song"
+        assert kinds.get("c.wav") == "song"
+        assert kinds.get("song_stems") == "stems"
+        assert "notes.txt" not in kinds
+        assert not any("Final_7.1" in p for p, _ in j)
+
+        # duplicates removed
+        assert len(expand_inputs([os.path.join(d, "a.flac")] * 3)) == 1
 
 
 def _run_all():
