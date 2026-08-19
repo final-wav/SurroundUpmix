@@ -1,10 +1,8 @@
-# SurroundUpmix v2
+# SurroundUpmix
 
 Turn a stereo song into a genuine **5.1 / 7.1 / 7.1.2** surround mix — locally, cross-platform, with free tools.
 
-v2 is a from-scratch rewrite in **Python**. Instead of spreading the stereo image wider (which smears every instrument into every speaker), or deciding placement purely by which *stem* a sound falls into, it splits **every stem into its direct and its ambient part** and places each where it physically belongs: the dry, localised source stays anchored at the front; only the decorrelated room/reverb wraps around you.
-
-> This is an independent re-implementation of the "SurroundUpmix" concept. The v1 PowerShell engine (SoX + CenterCutCL) lives in [`legacy/`](legacy/); v2 supersedes it.
+Instead of spreading the stereo image wider (which smears every instrument into every speaker), or deciding placement purely by which *stem* a sound falls into, it splits **every stem into its direct and its ambient part** and places each where it physically belongs: the dry, localised source stays anchored at the front; only the decorrelated room/reverb wraps around you.
 
 ---
 
@@ -140,7 +138,6 @@ gui.py                  # dark-mode Tkinter GUI (drives both CLIs)
 SurroundUpmix-GUI.bat   # double-click launcher for the GUI (Windows)
 split_vocals.py         # lead/backing Roformer karaoke split (used by allinone)
 tests/test_engine.py    # synthetic-signal tests (physics, no audio needed)
-legacy/                 # the v1 PowerShell engine (SoX + CenterCutCL)
 ```
 
 Run the tests with `python tests/test_engine.py` (or `pytest`). They prove the physics — coherent → front, decorrelated → rear, bass stays front, the auto-balance hits its target, channel counts and the WAV mask are correct — without needing any real audio.
@@ -149,4 +146,4 @@ Run the tests with `python tests/test_engine.py` (or `pytest`). They prove the p
 
 ## Licence
 
-The scripts in this repo are provided as-is for personal use. The third-party tools (Demucs, audio-separator / Roformer models, and — for `legacy/` — SoX, CenterCutCL, ffmpeg) each carry their own licences; get them from their own sources.
+The scripts in this repo are provided as-is for personal use. The third-party tools (Demucs, and the audio-separator / Roformer models) each carry their own licences; get them from their own sources.
