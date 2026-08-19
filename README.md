@@ -46,7 +46,7 @@ Per-stem modulation (the few things that really *are* category-specific):
 - **Bass** → front + LFE only (never wraps).
 - **Drums** → front body + a gentle same-side wash of the decorrelated cymbals/room.
 - **Vocals (lead)** → direct anchored to the centre/front; a short-delay **doubled** vocal is detected and kept fully forward (spreading it would comb-filter).
-- **Other / guitar / piano** → direct up front, **ambient** wraps sides + backs + heights.
+- **Other / guitar / piano** → the dry, localisable **direct** part is held up front; its **ambient** wraps sides + backs + heights — and **how far it wraps is decided per song** from the stem's measured diffuseness + pan (no instrument labels). A dry, centred guitar stays forward; a reverberant or hard-panned guitar/synth pushes much more of itself to the sides/backs, and a near-fully-diffuse pad ends up mostly behind you — so the same instrument can sit front in one song and wrap the room in the next.
 - **Backing vocals** (from the karaoke split) → their own object behind you, with the full clean vocal laid underneath as a quiet **bed** to mask split artifacts.
 - **Heights (7.1.2)** are fed from the **decorrelated ambient** specifically (air, not just treble) — what real height channels want.
 - **LFE** is derived from the real low end of **bass + kick**, not a low-pass of the whole mix.
