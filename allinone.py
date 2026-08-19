@@ -17,6 +17,8 @@ from surroundupmix.engine import upmix_folder
 from surroundupmix.presets import PRESETS, DEFAULT_PRESET
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
+PLACE_ZONES = ["auto", "front", "side", "rear"]
 
 
 def run(cmd, **kw):
@@ -54,11 +56,21 @@ def find_stems_dir(sep_root, model, track):
     return cand
 
 
+def default_split_python():
+    """The isolated splitter venv (has audio-separator), if present next to us."""
+    for rel in (["bin", "splitter_venv", "Scripts", "python.exe"],
+                ["bin", "splitter_venv", "bin", "python"]):
+        cand = os.path.join(HERE, *rel)
+        if os.path.isfile(cand):
+            return cand
+    return None
+
+
 def do_split(split_python, vocals_flac, work):
     split_script = os.path.join(HERE, "split_vocals.py")
     if not os.path.isfile(split_script):
         return None
-    py = split_python or sys.executable
+    py = split_python or default_split_python() or sys.executable
     out = os.path.join(work, "vocalsplit")
     models = os.path.join(HERE, "bin", "splitter_models")
     r = run([py, split_script, vocals_flac, out, models])
@@ -90,7 +102,11 @@ def main(argv=None):
     ap.add_argument("--backing-gain", default="auto")
     ap.add_argument("--keep-stems", action="store_true")
     ap.add_argument("--wav", action="store_true")
+    for stem in PLACE_STEMS:
+        ap.add_argument("--place-%s" % stem, default="auto", choices=PLACE_ZONES,
+                        help="force %s to a zone (auto = song-adaptive)" % stem)
     args = ap.parse_args(argv)
+    place = {s: getattr(args, "place_" + s) for s in PLACE_STEMS}
 
     song = os.path.abspath(args.song)
     if not os.path.isfile(song):
@@ -142,7 +158,7 @@ def main(argv=None):
         stems_dir, fmt=args.format, preset=args.preset, out_dir=out_dir,
         track_label=track, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
-        backing_gain=args.backing_gain, force_wav=args.wav)
+        backing_gain=args.backing_gain, force_wav=args.wav, place=place)
 
     if not args.keep_stems:
         shutil.rmtree(work, ignore_errors=True)

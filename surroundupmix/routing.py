@@ -61,6 +61,33 @@ def _c2db(frac):
     return 20.0 * np.log10(frac)
 
 
+def _diffuseness(direct, ambient):
+    """0..1: share of this stem's energy that is decorrelated (ambient)."""
+    ed = float(np.mean(direct.L ** 2 + direct.R ** 2))
+    ea = float(np.mean(ambient.L ** 2 + ambient.R ** 2))
+    return ea / (ed + ea + 1e-12)
+
+
+def _auto_place(direct, ambient, p):
+    """Song-adaptive wrap deltas (dB) for a texture stem, from *measurable*
+    features - not instrument labels. A diffuse/reverberant part wraps more; a
+    dry, centred part is held forward. A clearly panned part gets extra to its
+    sides. Returns (side, back, height) dB deltas added on top of the preset.
+    Demucs never labels a "trumpet", so we don't pretend to - we react to how
+    the signal actually behaves per song. Disable with preset auto_place=False.
+    """
+    if not p.get("auto_place", True):
+        return 0.0, 0.0, 0.0
+    d = _diffuseness(direct, ambient)
+    pan = abs(lateral_pan(direct))
+    kd = p.get("ap_k", 6.0); d0 = p.get("ap_d0", 0.45)
+    kp = p.get("ap_kp", 4.0); p0 = p.get("ap_p0", 0.25)
+    lo = p.get("ap_min", -6.0); hi = p.get("ap_max", 5.0)
+    base = max(lo, min(hi, kd * (d - d0)))     # diffuseness -> all zones wrap more/less
+    wide = max(0.0, kp * (pan - p0))           # clear pan -> extra to the sides only
+    return base + wide, base, base
+
+
 def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
     """AMBIENT -> surround field, by category modulation."""
     fmt = chans.fmt
@@ -84,18 +111,16 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
         return
 
     if name in TEXTURE:
-        # full wrap: sides + backs + heights (heights from decorrelated air)
-        chans.add(sl, ambient.L, p["amb_side"])
-        chans.add(sr_ch, ambient.R, p["amb_side"])
-        if bl != sl:  # discrete backs exist (7.1/7.1.2)
-            chans.add(bl, ambient.L, p["amb_back"])
-            chans.add(br, ambient.R, p["amb_back"])
-        else:         # 5.1: fold the back send onto the single surround pair
-            chans.add(bl, ambient.L, p["amb_back"])
-            chans.add(br, ambient.R, p["amb_back"])
+        # full wrap: sides + backs + heights, song-adaptive per stem (auto-place)
+        ds, dbk, dh = _auto_place(direct, ambient, p)
+        chans.add(sl, ambient.L, p["amb_side"] + ds)
+        chans.add(sr_ch, ambient.R, p["amb_side"] + ds)
+        # 7.1/7.1.2 have discrete backs; on 5.1 bl/br == the surround pair (folds in)
+        chans.add(bl, ambient.L, p["amb_back"] + dbk)
+        chans.add(br, ambient.R, p["amb_back"] + dbk)
         if heights:
-            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), p["amb_height"])
-            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), p["amb_height"])
+            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), p["amb_height"] + dh)
+            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), p["amb_height"] + dh)
         _lateral_arc(chans, direct, p)
         return
 
@@ -155,20 +180,51 @@ def _route_backing(chans, stems, p, backing_gain_db):
             chans.add("TFR", highpass(bed.R, 3000, backing.sr), bg - 13)
 
 
-def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.0):
+def _route_forced(chans, name, direct, ambient, zone, p, sr):
+    """Manual per-stem placement override (a taste decision no metric can make):
+    put the whole stem (direct + its ambient) into a chosen zone.
+      front -> hold at the front image      side -> the side pair
+      rear  -> the back pair (+ height air)
+    """
+    fmt = chans.fmt
+    sl, sr_ch = side_pair(fmt)
+    bl, br = surround_pair(fmt)
+    if zone == "front":
+        _route_direct(chans, name, direct, p)
+        chans.add("FL", ambient.L, -3.0)
+        chans.add("FR", ambient.R, -3.0)
+    elif zone == "side":
+        chans.add(sl, direct.L, 0.0); chans.add(sr_ch, direct.R, 0.0)
+        chans.add(sl, ambient.L, 0.0); chans.add(sr_ch, ambient.R, 0.0)
+    elif zone == "rear":
+        chans.add(bl, direct.L, 0.0); chans.add(br, direct.R, 0.0)
+        chans.add(bl, ambient.L, 0.0); chans.add(br, ambient.R, 0.0)
+        if has_heights(fmt):
+            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), -3.0)
+            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), -3.0)
+
+
+def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.0,
+               place=None):
     """Build the spatial channels (everything except the final LFE + balance).
+    `place` is an optional {stem: 'auto'|'front'|'side'|'rear'} of manual overrides.
     Returns a Channels object.
     """
     n = max(len(s) for s in stems.values())
     chans = Channels(fmt, n)
     keep_vocal_forward = (vocal_class == "double")
+    place = place or {}
 
     for name, st in stems.items():
         if name in ("backing", "vocals_full"):
             continue
         direct, ambient = decompose(st)
-        _route_direct(chans, name, direct, preset)
-        _route_ambient(chans, name, ambient, direct, preset, sr, keep_vocal_forward)
+        mode = str(place.get(name, "auto")).lower()
+        if mode in ("front", "side", "rear"):
+            _route_forced(chans, name, direct, ambient, mode, preset, sr)
+        else:
+            _route_direct(chans, name, direct, preset)
+            _route_ambient(chans, name, ambient, direct, preset, sr, keep_vocal_forward)
 
     _route_backing(chans, stems, preset, backing_gain_db)
     return chans

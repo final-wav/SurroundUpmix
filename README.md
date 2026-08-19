@@ -77,7 +77,7 @@ No SoX, no CenterCutCL, no platform lock-in — it runs anywhere Python does.
 
 ## Usage
 
-**GUI (dark mode, batch queue)** — double-click `SurroundUpmix-GUI.bat` on Windows, or run `python gui.py` anywhere. **Drag songs or whole folders onto the window** (or use *Add files / Add folder*) — each drop is auto-classified into a queue: a folder of Demucs stems becomes one job, any other folder is scanned for audio and each track becomes a job, and files become jobs. Set format/preset once (applied to every job), hit **Start queue**, and the jobs render one after another with a live per-row status and log. Tkinter ships with Python; OS drag & drop additionally needs `pip install tkinterdnd2` (without it, the Add buttons still fill the queue).
+**GUI (dark mode, batch queue)** — double-click `SurroundUpmix-GUI.bat` on Windows, or run `python gui.py` anywhere. **Drag songs or whole folders onto the window** (or use *Add files / Add folder*) — each drop is auto-classified into a queue: a folder of Demucs stems becomes one job, any other folder is scanned for audio and each track becomes a job, and files become jobs. Set format/preset once (applied to every job), hit **Start queue**, and the jobs render one after another with a live per-row status and log. Tkinter ships with Python; OS drag & drop additionally needs `pip install tkinterdnd2` (without it, the Add buttons still fill the queue). Every option has a **hover tooltip**, and a **live description under the options** explains the selected preset — the help is built into the window.
 
 **Full chain — song → surround:**
 ```bash
@@ -107,6 +107,16 @@ Anchored on **`immersive`** — the balanced character the project was hand-tune
 All are phase-coherent: no L−R inversion, no decorrelation delays — only the genuinely decorrelated ambient wraps, so the pristine front image is never cancelled.
 
 Key options (both CLIs): `--rear-gain` (taste offset on the rear field), `--rear-below-front` (override the balance target), `--vocal-mode auto|spread|forward`, `--backing-gain auto|<dB>`, `--lfe-cross <Hz>`, `--wav` (force WAV even for ≤8 ch).
+
+---
+
+## Placement — auto, and by hand
+
+**Model:** `--model htdemucs_6s` (or the GUI *Demucs model* box) separates **guitar** and **piano** as their own stems, so they can be placed individually. It is slower, has no `_ft` refinement, and the `piano` stem is the weakest link, so **`htdemucs_ft` (4-stem) stays the default.**
+
+**Auto-place (per song, no labels):** Demucs never tells you a sound is a "trumpet" — that's baked into `other` — and "should be behind me" is artistic intent, not something in the signal. So the engine doesn't guess instruments; it reacts to *measurable* per-stem behaviour. For each texture stem it measures its **diffuseness** (how decorrelated it is) and its **pan**, and adapts how far its ambient wraps: a dry, centred guitar/piano is held forward automatically, while a reverberant or clearly panned part wraps further to the sides/back — song by song. Tunable per preset (`ap_k`, `ap_d0`, `ap_kp`, `ap_p0`); set `auto_place=False` to fall back to fixed preset dB.
+
+**Manual overrides (taste decisions a metric can't make):** force any stem into a zone — `--place-guitar rear`, `--place-piano side`, `--place-other front`, etc. (`auto | front | side | rear`, default `auto`). In the GUI: the **Placement per stem** row. `auto` uses the auto-place layer; the others put that whole stem (its direct source *and* its ambient) into the chosen zone.
 
 ---
 

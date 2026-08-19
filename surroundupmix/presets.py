@@ -35,7 +35,7 @@ PRESETS = {
         amb_side=-4, amb_back=-7, amb_height=-9,
         drum_side=-9, voc_side=-10,
         height_hp=3000, lateral_arc=0.25,
-        rear_below_front=16, lfe_cross=120,
+        rear_below_front=15, lfe_cross=120,   # rear_below_front 16->15 = 1 dB louder rear
     ),
     # roomy / live - a touch more height and back, slightly looser front
     "concert": dict(

@@ -35,7 +35,13 @@ def main(argv=None):
     ap.add_argument("--wav", action="store_true",
                     help="force WAV output even for <=8 channels")
     ap.add_argument("-q", "--quiet", action="store_true")
+    _place_stems = ("vocals", "bass", "drums", "other", "guitar", "piano")
+    for stem in _place_stems:
+        ap.add_argument("--place-%s" % stem, default="auto",
+                        choices=["auto", "front", "side", "rear"],
+                        help="force %s to a zone (auto = song-adaptive)" % stem)
     args = ap.parse_args(argv)
+    place = {s: getattr(args, "place_" + s) for s in _place_stems}
 
     try:
         out = upmix_folder(
@@ -44,7 +50,7 @@ def main(argv=None):
             rear_gain=args.rear_gain, rear_below_front=args.rear_below_front,
             vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
             lfe_cross=args.lfe_cross, norm_level=args.norm_level,
-            force_wav=args.wav, verbose=not args.quiet)
+            force_wav=args.wav, place=place, verbose=not args.quiet)
     except Exception as e:
         print("ERROR:", e, file=sys.stderr)
         return 1

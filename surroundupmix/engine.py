@@ -19,7 +19,8 @@ def _log(verbose, msg):
 def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
-                 lfe_cross=None, norm_level=-0.1, force_wav=False, verbose=True):
+                 lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
+                 verbose=True):
     """Upmix a Demucs stems folder. Returns the output path."""
     stems, sr = load_stems(stems_folder)
     p = _presets.get(preset)
@@ -58,7 +59,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
 
     # spatialise
     chans = spatialize(stems, fmt, p, sr, vocal_class=vocal_class,
-                       backing_gain_db=backing_gain_db)
+                       backing_gain_db=backing_gain_db, place=place)
 
     # LFE
     lfe = build_lfe(stems, p["lfe_cross"], sr)

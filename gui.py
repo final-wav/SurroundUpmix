@@ -55,6 +55,75 @@ PRESETS = ["focus", "immersive", "concert", "envelop"]
 DEVICES = ["auto", "cuda", "cpu"]
 SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
+MODELS = ["htdemucs_ft", "htdemucs_6s"]  # 6s adds guitar + piano stems (slower, no _ft, weak piano)
+
+PRESET_DESC = {
+    "focus":     "Vocal-forward, subtle wrap. Lead sits firmly in the centre, rears quietest. "
+                 "Best for vocal/dialogue-led tracks (rap, singer-songwriter, podcasts).",
+    "immersive": "Balanced all-rounder - the reference the project was hand-tuned to by ear. "
+                 "Fits most songs.  (Default)",
+    "concert":   "Roomier: more to the sides / backs / heights, vocal a touch looser. "
+                 "Best for live or spacious recordings - 'sit in the room'.",
+    "envelop":   "Maximum wrap - most of the ambience all around you, vocal least anchored. "
+                 "Best for ambient / electronic / wide mixes (can be too much on dry recordings).",
+}
+
+TIPS = {
+    "Format": "Speaker layout. 5.1 / 7.1 are written as FLAC; 7.1.2 adds two height speakers "
+              "and is written as WAV.",
+    "Preset": "Overall character - how much wraps around you and how firmly the vocal is "
+              "centred. The line below the options describes the selected one.",
+    "Device": "auto uses your NVIDIA GPU if present (much faster), otherwise the CPU.",
+    "Split vocals": "Split the vocal into LEAD + BACKING (Roformer karaoke): the lead stays "
+                    "front, the backing becomes its own object behind you. auto = split when "
+                    "the splitter is installed.",
+    "Vocal mode": "auto detects a short-delay-DOUBLED vocal and keeps it forward (spreading it "
+                  "would comb-filter into 'many voices'). forward / spread override.",
+    "Rear gain (dB)": "Taste offset on the WHOLE rear field, on top of the auto-balance. "
+                      "+2 = a bit more surround; negative = less.",
+    "Rear below front": "Auto-balance target: keep the rear field this many dB under the front, "
+                        "every song. Blank = use the preset. Smaller number = louder rear.",
+    "Backing gain": "Level of the split-out backing choir. auto sits it a set amount under the "
+                    "lead per song; or type a dB value.",
+    "Demucs model": "htdemucs_ft = 4 stems (bass/drums/vocals/other), best quality (default). "
+                    "htdemucs_6s also separates guitar + piano for individual placement "
+                    "(slower, no _ft, weaker piano).",
+}
+
+PLACE_TIP = ("Where each instrument goes.\n"
+             "auto = song-adaptive: a dry, centred part stays front; a diffuse or clearly "
+             "panned part wraps to the sides/back by itself.\n"
+             "front / side / rear force this whole stem (its dry source AND its ambient) "
+             "into that zone.")
+
+
+class ToolTip:
+    """Minimal dark hover tooltip."""
+
+    def __init__(self, widget, text):
+        self.widget = widget
+        self.text = text
+        self.tip = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+
+    def _show(self, _=None):
+        if self.tip or not self.text:
+            return
+        x = self.widget.winfo_rootx() + 14
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tw = tk.Toplevel(self.widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry("+%d+%d" % (x, y))
+        tk.Label(tw, text=self.text, justify="left", bg="#20242b", fg="#e6e6e8",
+                 relief="solid", borderwidth=1, padx=8, pady=6, wraplength=360,
+                 font=("Segoe UI", 9)).pack()
+
+    def _hide(self, _=None):
+        if self.tip:
+            self.tip.destroy()
+            self.tip = None
+
 
 # ---- GUI --------------------------------------------------------------------
 class App:
@@ -186,25 +255,45 @@ class App:
         opt.pack(fill="x", pady=(0, 10))
         for c in range(4):
             opt.columnconfigure(c, weight=1, uniform="opt")
-        self.format, _ = self._combo(opt, "Format", FORMATS, "7.1.2", 0, 0)
-        self.preset, _ = self._combo(opt, "Preset", PRESETS, "immersive", 0, 1)
-        self.device, _ = self._combo(opt, "Device", DEVICES, "auto", 0, 2)
-        self.split, _ = self._combo(opt, "Split vocals", SPLIT, "auto", 0, 3)
-        self.vocal, _ = self._combo(opt, "Vocal mode", VOCAL, "auto", 1, 0)
-        self.rear_gain = self._entry(opt, "Rear gain (dB)", "0", 1, 1)
-        self.rear_below = self._entry(opt, "Rear below front", "", 1, 2)
-        self.backing = self._entry(opt, "Backing gain", "auto", 1, 3)
+        self.format, _ = self._combo(opt, "Format", FORMATS, "7.1.2", 0, 0, TIPS["Format"])
+        self.preset, preset_cb = self._combo(opt, "Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"])
+        self.device, _ = self._combo(opt, "Device", DEVICES, "auto", 0, 2, TIPS["Device"])
+        self.split, _ = self._combo(opt, "Split vocals", SPLIT, "auto", 0, 3, TIPS["Split vocals"])
+        self.vocal, _ = self._combo(opt, "Vocal mode", VOCAL, "auto", 1, 0, TIPS["Vocal mode"])
+        self.rear_gain = self._entry(opt, "Rear gain (dB)", "0", 1, 1, TIPS["Rear gain (dB)"])
+        self.rear_below = self._entry(opt, "Rear below front", "", 1, 2, TIPS["Rear below front"])
+        self.backing = self._entry(opt, "Backing gain", "auto", 1, 3, TIPS["Backing gain"])
+        self.model, _ = self._combo(opt, "Demucs model", MODELS, "htdemucs_ft", 2, 0, TIPS["Demucs model"])
         orow = ttk.Frame(opt)
-        orow.grid(row=2, column=0, columnspan=4, sticky="ew", pady=(12, 0))
+        orow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         ttk.Label(orow, text="Output folder  (blank = next to each song)",
                   style="Muted.TLabel").pack(anchor="w")
         prow = ttk.Frame(opt)
-        prow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(2, 0))
+        prow.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(2, 0))
         self.outdir = tk.StringVar()
         ttk.Entry(prow, textvariable=self.outdir).pack(side="left", fill="x",
                                                        expand=True)
         ttk.Button(prow, text="Browse…", style="Ghost.TButton",
                    command=self._browse_out).pack(side="left", padx=(8, 0))
+
+        # live preset description (updates when the Preset box changes)
+        self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
+        ttk.Label(body, textvariable=self.preset_desc, style="Muted.TLabel",
+                  wraplength=920, justify="left").pack(fill="x", padx=6, pady=(0, 8))
+        preset_cb.bind("<<ComboboxSelected>>",
+                       lambda e: self.preset_desc.set(PRESET_DESC.get(self.preset.get(), "")))
+
+        # -- placement per stem (manual overrides; auto = song-adaptive)
+        pl = ttk.Labelframe(body, text="  PLACEMENT PER STEM  (auto = song-adaptive)  ",
+                            style="Card.TLabelframe", padding=12)
+        pl.pack(fill="x", pady=(0, 10))
+        PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
+        for c in range(len(PLACE_STEMS)):
+            pl.columnconfigure(c, weight=1, uniform="pl")
+        self.place = {}
+        for i, stem in enumerate(PLACE_STEMS):
+            var, _ = self._combo(pl, stem, ["auto", "front", "side", "rear"], "auto", 0, i, PLACE_TIP)
+            self.place[stem] = var
 
         # -- actions
         act = ttk.Frame(body, style="Bg.TFrame")
@@ -231,21 +320,30 @@ class App:
         lsb.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=lsb.set, state="disabled")
 
-    def _combo(self, parent, label, values, default, r, c):
+    def _combo(self, parent, label, values, default, r, c, tip=None):
         f = ttk.Frame(parent)
         f.grid(row=r, column=c, sticky="ew", padx=4, pady=4)
-        ttk.Label(f, text=label, style="Muted.TLabel").pack(anchor="w")
+        lab = ttk.Label(f, text=label, style="Muted.TLabel")
+        lab.pack(anchor="w")
         var = tk.StringVar(value=default)
         cb = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
         cb.pack(fill="x")
+        if tip:
+            ToolTip(lab, tip)
+            ToolTip(cb, tip)
         return var, cb
 
-    def _entry(self, parent, label, default, r, c):
+    def _entry(self, parent, label, default, r, c, tip=None):
         f = ttk.Frame(parent)
         f.grid(row=r, column=c, sticky="ew", padx=4, pady=4)
-        ttk.Label(f, text=label, style="Muted.TLabel").pack(anchor="w")
+        lab = ttk.Label(f, text=label, style="Muted.TLabel")
+        lab.pack(anchor="w")
         var = tk.StringVar(value=default)
-        ttk.Entry(f, textvariable=var).pack(fill="x")
+        e = ttk.Entry(f, textvariable=var)
+        e.pack(fill="x")
+        if tip:
+            ToolTip(lab, tip)
+            ToolTip(e, tip)
         return var
 
     # ------------------------------------------------------------ queue ops
@@ -314,7 +412,7 @@ class App:
                   "--backing-gain", self.backing.get().strip() or "auto"]
         if kind == "song":
             cmd = [py, os.path.join(HERE, "allinone.py"), path,
-                   "--device", self.device.get(),
+                   "--device", self.device.get(), "--model", self.model.get(),
                    "--split-vocals", self.split.get()] + common
         else:
             cmd = [py, os.path.join(HERE, "upmix.py"), path] + common
@@ -327,6 +425,10 @@ class App:
         od = self.outdir.get().strip()
         if od:
             cmd += ["--out-dir", od]
+        for stem, var in self.place.items():
+            v = var.get()
+            if v and v != "auto":
+                cmd += ["--place-%s" % stem, v]
         return cmd
 
     def _start(self):
