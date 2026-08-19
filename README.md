@@ -1,141 +1,136 @@
-# SurroundUpmix
+# SurroundUpmix v2
 
-Turn a stereo song into a genuine **5.1 / 7.1 / 7.1.2** surround mix — locally, on Windows, with free tools.
+Turn a stereo song into a genuine **5.1 / 7.1 / 7.1.2** surround mix — locally, cross-platform, with free tools.
 
-Instead of just spreading the stereo image wider (which smears every instrument into every speaker), this pipeline **separates the song into its parts first** and then places each one where it belongs: lead vocal locked to the front/centre, bass to the front + LFE, drums across the front and sides, instruments and their ambience around you, and — with the karaoke split — **backing vocals as their own object behind you**.
+v2 is a from-scratch rewrite in **Python**. Instead of spreading the stereo image wider (which smears every instrument into every speaker), or deciding placement purely by which *stem* a sound falls into, it splits **every stem into its direct and its ambient part** and places each where it physically belongs: the dry, localised source stays anchored at the front; only the decorrelated room/reverb wraps around you.
 
-It is phase-coherent (no comb-filter mush), it detects short-delay-doubled vocals and keeps them forward, and it auto-balances the whole rear field per song so every track sits consistently.
-
-> This is an independent re-implementation of the "SurroundUpmix" concept. The original forum script was not available, so the engine here was written from scratch and then extended.
+> This is an independent re-implementation of the "SurroundUpmix" concept. The v1 PowerShell engine (SoX + CenterCutCL) lives in [`legacy/`](legacy/); v2 supersedes it.
 
 ---
 
-## What it does
+## The core idea: direct vs. ambient, not front vs. back-by-category
+
+A real Atmos album "fits perfectly" because the engineer places the **dry** source and then adds room/reverb **designed for the speaker layout**. A stereo master has all of that already baked into two channels — you can't un-bake the artist's intent, but you *can* recover the one thing that matters most: **what is a localised source and what is diffuse space.**
+
+For every stem the engine computes the short-time **inter-channel coherence** and splits it:
+
+```
+gamma(f,t) = |<L·conj(R)>| / sqrt(<|L|²>·<|R|²>)     (0 = decorrelated, 1 = coherent)
+
+direct  = X · gamma            → front image, keeps its L↔R position
+ambient = X · sqrt(1 - gamma²) → the surround field (sides / backs / heights)
+```
+
+`gamma² + (1-gamma²) = 1`, so the split conserves energy per time-frequency tile. A dry, panned or centred source (γ→1) is **all direct**; independent stereo width / reverb (γ→0) is **all ambient**. This is exactly the decision a mixing engineer makes in reverse — made measurable, and applied per song.
+
+**What it can and can't do** (honestly): stereo carries only *one* real spatial axis — left↔right — plus an implicit depth hint (reverb). So the engine **reconstructs real left→right position and movement** and puts the song's own space around you. It does **not** invent front↔back trajectories or "circle" a static source — that information simply isn't in two channels, and faking it sounds like a gimmick.
+
+---
+
+## Signal flow
 
 ```
 stereo song
    │  Demucs (AI stem separation, GPU)
    ▼
-bass · drums · vocals · other
-   │  Roformer karaoke split (optional)
+bass · drums · vocals · other  (+ guitar/piano with a 6-stem model)
+   │  Roformer karaoke split (optional): vocals → lead + backing
    ▼
-vocals → lead + backing
-   │  SoX + CenterCutCL routing
+per stem:  direct/ambient decomposition
    ▼
-FL FR FC LFE  BL BR  SL SR  (TFL TFR)
+FL FR FC  LFE  BL BR  SL SR  (TFL TFR)
 ```
 
-- **Lead vocal** → centre / front phantom, anchored (never smeared).
-- **Backing vocals** → placed behind you (real source separation = phase-safe), with a full-vocal "bed" underneath to mask separation artifacts.
-- **Bass** → front + LFE only (LFE is derived from the real low end of the full mix).
-- **Drums** → front body + a gentle cymbal wash to the sides.
-- **Other / guitar / piano** → the texture that wraps the sides / backs / height.
-- **Rear/front auto-balance** keeps the surround field a fixed amount under the front on *every* song.
+Per-stem modulation (the few things that really *are* category-specific):
 
-FLAC caps at 8 channels, so **5.1 and 7.1 are written as FLAC, 7.1.2 as WAV**.
+- **Bass** → front + LFE only (never wraps).
+- **Drums** → front body + a gentle same-side wash of the decorrelated cymbals/room.
+- **Vocals (lead)** → direct anchored to the centre/front; a short-delay **doubled** vocal is detected and kept fully forward (spreading it would comb-filter).
+- **Other / guitar / piano** → direct up front, **ambient** wraps sides + backs + heights.
+- **Backing vocals** (from the karaoke split) → their own object behind you, with the full clean vocal laid underneath as a quiet **bed** to mask split artifacts.
+- **Heights (7.1.2)** are fed from the **decorrelated ambient** specifically (air, not just treble) — what real height channels want.
+- **LFE** is derived from the real low end of **bass + kick**, not a low-pass of the whole mix.
+- **Rear/front auto-balance** trims the whole rear field to a fixed amount under the front, per song, so every track sits consistently.
+
+5.1 and 7.1 are written as 24-bit **FLAC**; 7.1.2 (10 ch) as a 24-bit **WAV** with a correct `WAVEFORMATEXTENSIBLE` channel mask so players route the ten channels right.
 
 ---
 
-## Files
+## Install
 
-| File | What it is |
-|------|------------|
-| `SurroundUpmix.ps1` | the upmix **engine** — takes a folder of stems, writes the surround file |
-| `SurroundUpmix-AllInOne.ps1` | the **full chain** — song file → Demucs → (split) → upmix |
-| `SurroundUpmix-GUI.ps1` | dark **WinForms GUI** exposing every option |
-| `SurroundUpmix.bat` | double-click launcher for the GUI |
-| `RunBatch.ps1` | process **every song in a folder** (resumable) |
-| `detect_vocal.py` | detects a short-delay-doubled vocal (so it isn't smeared) |
-| `split_vocals.py` | lead/backing split via a Mel-Band Roformer karaoke model |
-
----
-
-## Requirements (all free)
-
-The scripts look for their tools in a `bin\` folder next to them. `bin\` is **not** in this repo (binaries + licences + size) — download them once:
-
-1. **SoX** 14.4.2 — <https://sourceforge.net/projects/sox/files/sox/14.4.2/> — unzip the *whole* folder to `bin\SoX\` (it needs its DLLs, not just `sox.exe`).
-2. **CenterCutCL** — from moitah.net (use the [Wayback Machine](https://web.archive.org/web/*/http://www.moitah.net/download/latest/Center_Cut_GUI.zip) if the site is down) — put `CenterCutCL.exe` in `bin\`.
-3. **ffmpeg** *(optional, only for `-LoudnessMatch`)* — <https://www.gyan.dev/ffmpeg/builds/> — `bin\ffmpeg\ffmpeg.exe`.
-4. **Demucs** (AI separation): `py -3.10 -m pip install -U demucs`. For NVIDIA GPU first install CUDA PyTorch:
-   `py -3.10 -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121`
-5. **Lead/backing splitter** *(optional)* — an isolated venv with `audio-separator`:
-   ```
-   py -3.10 -m venv bin\splitter_venv
-   bin\splitter_venv\Scripts\python -m pip install audio-separator onnxruntime torch torchaudio --index-url https://download.pytorch.org/whl/cu121
-   ```
-   The Roformer karaoke model (~900 MB) downloads on first use into `bin\splitter_models\`.
-
-Folder layout:
+```bash
+pip install -r requirements.txt          # numpy, scipy, soundfile — the engine
 ```
-SurroundUpmix\
-├─ SurroundUpmix.ps1 / -AllInOne.ps1 / -GUI.ps1 / RunBatch.ps1
-├─ detect_vocal.py / split_vocals.py / SurroundUpmix.bat
-└─ bin\
-   ├─ CenterCutCL.exe
-   ├─ SoX\  (whole folder)
-   ├─ ffmpeg\ffmpeg.exe          (optional)
-   ├─ splitter_venv\             (optional)
-   └─ splitter_models\           (optional, auto-filled)
+
+For the full chain (`allinone.py`):
+
+```bash
+pip install -U demucs                     # AI stem separation
+# NVIDIA GPU: pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+pip install audio-separator onnxruntime   # optional: lead/backing karaoke split
 ```
+
+No SoX, no CenterCutCL, no platform lock-in — it runs anywhere Python does.
 
 ---
 
 ## Usage
 
-**GUI** — double-click `SurroundUpmix.bat`, pick a song, choose the options, **Start**.
-
-**Full chain (CLI):**
-```powershell
-.\SurroundUpmix-AllInOne.ps1 "D:\Music\song.flac" -OutputFormat 7.1.2 -Preset Immersive -Device cuda -SplitVocals on
+**Full chain — song → surround:**
+```bash
+python allinone.py "song.flac" --format 7.1.2 --preset immersive --device cuda
 ```
 
-**A whole folder:**
-```powershell
-.\RunBatch.ps1 "D:\Music\album" -OutputFormat 7.1.2 -Preset Immersive
+**Just upmix an existing Demucs stems folder:**
+```bash
+python upmix.py "stems/song" --format 5.1 --preset focus
 ```
 
-**Just upmix existing Demucs stems:**
-```powershell
-.\SurroundUpmix.ps1 "D:\stems\song" -OutputFormat 5.1 -Preset Focus
-```
+Run either with `-h` for every option.
 
 ---
 
 ## Presets
 
-`None · Music · Movie · Anime · PLIIx` (classic) and the enveloping family:
+Anchored on **`immersive`** — the balanced character the project was hand-tuned to by ear — with the family derived by how much of the *ambient* component wraps and how firmly the lead vocal is centred:
 
-- **Focus** – vocal-forward, tasteful wrap
-- **Immersive** – balanced all-rounder *(default)*
-- **Envelop** – maximum wrap
-- **Concert** – roomy / live
-- **WideStage** – wide front + sides
+| Preset | Character |
+|--------|-----------|
+| `focus` | vocal-forward, tasteful wrap |
+| `immersive` | balanced all-rounder *(default)* |
+| `concert` | roomy / live |
+| `envelop` | maximum wrap |
 
-All enveloping presets are phase-coherent: only the direct same-side **high band** wraps (no decorrelation delays, no L−R inversion, no echo), so the full-range front image is never cancelled.
+All are phase-coherent: no L−R inversion, no decorrelation delays — only the genuinely decorrelated ambient wraps, so the pristine front image is never cancelled.
 
-## Key options
-
-| Option | Meaning |
-|--------|---------|
-| `-BackingMode` | `blend` (backing + full-vocal bed, default) · `choir` (backing + reverb glue) · `halo` (reverb only) · `rear` (dry) |
-| `-BackingGain` | `auto` = balance backing vs the lead per song, or a fixed dB |
-| `-RearBelowFront` | keep the whole rear field this many dB under the front (default 16) |
-| `-RearGain` | your taste offset on top of the balance |
-| `-VocalMode` | `auto` detects a doubled vocal and keeps it forward; `forward` / `spread` to force |
-| `-SplitVocals` | `on` / `off` the lead/backing karaoke split |
+Key options (both CLIs): `--rear-gain` (taste offset on the rear field), `--rear-below-front` (override the balance target), `--vocal-mode auto|spread|forward`, `--backing-gain auto|<dB>`, `--lfe-cross <Hz>`, `--wav` (force WAV even for ≤8 ch).
 
 ---
 
-## How the clever bits work
+## Layout
 
-- **Vocal doubling detection** (`detect_vocal.py`) — a short-delay double comb-filters into a "many voices" mess if you spread it. GCC-PHAT + the side-signal short/long-lag energy ratio tells a structured double from diffuse reverb; a doubled vocal stays fully forward.
-- **Lead/backing split** — Demucs can't split a vocal; a Mel-Band Roformer *karaoke* model can. The lead becomes the vocal (front), the backing becomes its own object.
-- **Backing artifacts** — separation is never perfect, so a hard front/back split "jumps" at word boundaries. `blend` lays the full clean vocal underneath as a bed to fill holes and mask transitions.
-- **Rear/front auto-balance** — every song carries a different amount of rear material, so the engine measures front vs rear energy and trims the rears to a fixed target — consistent from track to track.
+```
+surroundupmix/          # the engine (a normal Python package)
+  layouts.py            # speaker layouts + WAVE channel masks
+  io.py                 # load stems, write FLAC / WAV-extensible
+  decompose.py          # direct/ambient split (the core), pan, coherence
+  detect.py             # doubled-vocal classifier (GCC-PHAT)
+  dsp.py                # filters, gain, mono
+  routing.py            # stem → channels (direct front, ambient wrap)
+  balance.py            # LFE, front/rear auto-balance, normalise
+  presets.py            # the presets
+  engine.py             # end-to-end upmix_folder()
+upmix.py                # CLI: stems folder → surround
+allinone.py             # CLI: song → Demucs → (split) → surround
+split_vocals.py         # lead/backing Roformer karaoke split (used by allinone)
+tests/test_engine.py    # synthetic-signal tests (physics, no audio needed)
+legacy/                 # the v1 PowerShell engine (SoX + CenterCutCL)
+```
+
+Run the tests with `python tests/test_engine.py` (or `pytest`). They prove the physics — coherent → front, decorrelated → rear, bass stays front, the auto-balance hits its target, channel counts and the WAV mask are correct — without needing any real audio.
 
 ---
 
 ## Licence
 
-The scripts in this repo are provided as-is for personal use. The third-party tools (SoX, CenterCutCL, ffmpeg, Demucs, audio-separator / Roformer models) each carry their own licences — get them from their own sources.
+The scripts in this repo are provided as-is for personal use. The third-party tools (Demucs, audio-separator / Roformer models, and — for `legacy/` — SoX, CenterCutCL, ffmpeg) each carry their own licences; get them from their own sources.

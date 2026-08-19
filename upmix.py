@@ -1,0 +1,56 @@
+#!/usr/bin/env python3
+"""upmix.py - upmix a folder of Demucs stems to a surround file.
+
+    python upmix.py <stems-folder> [--format 5.1|7.1|7.1.2] [--preset ...]
+
+The stems folder holds bass/drums/vocals/other (+ optional guitar/piano, and
+backing/vocals_full from a karaoke split) as .flac or .wav.
+"""
+import argparse
+import sys
+
+from surroundupmix.engine import upmix_folder
+from surroundupmix.presets import PRESETS, DEFAULT_PRESET
+
+
+def main(argv=None):
+    ap = argparse.ArgumentParser(description="Upmix Demucs stems to surround.")
+    ap.add_argument("stems_folder")
+    ap.add_argument("-f", "--format", default="5.1",
+                    choices=["5.1", "7.1", "7.1.2"])
+    ap.add_argument("-p", "--preset", default=DEFAULT_PRESET,
+                    choices=list(PRESETS))
+    ap.add_argument("-o", "--out-dir", default=None)
+    ap.add_argument("--track-label", default=None)
+    ap.add_argument("--rear-gain", type=float, default=0.0,
+                    help="taste offset (dB) on the whole rear field")
+    ap.add_argument("--rear-below-front", type=float, default=None,
+                    help="override the preset's rear-under-front target (dB)")
+    ap.add_argument("--vocal-mode", default="auto",
+                    choices=["auto", "spread", "forward"])
+    ap.add_argument("--backing-gain", default="auto",
+                    help="'auto' or a dB number for split-out backing vocals")
+    ap.add_argument("--lfe-cross", type=int, default=None)
+    ap.add_argument("--norm-level", type=float, default=-0.1)
+    ap.add_argument("--wav", action="store_true",
+                    help="force WAV output even for <=8 channels")
+    ap.add_argument("-q", "--quiet", action="store_true")
+    args = ap.parse_args(argv)
+
+    try:
+        out = upmix_folder(
+            args.stems_folder, fmt=args.format, preset=args.preset,
+            out_dir=args.out_dir, track_label=args.track_label,
+            rear_gain=args.rear_gain, rear_below_front=args.rear_below_front,
+            vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
+            lfe_cross=args.lfe_cross, norm_level=args.norm_level,
+            force_wav=args.wav, verbose=not args.quiet)
+    except Exception as e:
+        print("ERROR:", e, file=sys.stderr)
+        return 1
+    print(out)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
