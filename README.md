@@ -41,18 +41,18 @@ per stem:  direct/ambient decomposition
 FL FR FC  LFE  BL BR  SL SR  (TFL TFR)
 ```
 
-Per-stem modulation (the few things that really *are* category-specific):
+The direct/ambient split is the same for every stem. On top of it, a handful of **per-stem rules** apply the few things that genuinely *are* category-specific — each one is a physical reason, not a stylistic preference:
 
-- **Bass** → front + LFE only (never wraps).
-- **Drums** → front body + a gentle same-side wash of the decorrelated cymbals/room.
-- **Vocals (lead)** → direct anchored to the centre/front; a short-delay **doubled** vocal is detected and kept fully forward (spreading it would comb-filter).
-- **Other / guitar / piano** → the dry, localisable **direct** part is held up front; its **ambient** wraps sides + backs + heights — and **how far it wraps is decided per song** from the stem's measured diffuseness + pan (no instrument labels). A dry, centred guitar stays forward; a reverberant or hard-panned guitar/synth pushes much more of itself to the sides/backs, and a near-fully-diffuse pad ends up mostly behind you — so the same instrument can sit front in one song and wrap the room in the next.
-- **Backing vocals** (from the karaoke split) → their own object behind you, with the full clean vocal laid underneath as a quiet **bed** to mask split artifacts.
-- **Heights (7.1.2)** are fed from the **decorrelated ambient** specifically (air, not just treble) — what real height channels want.
-- **LFE** is derived from the real low end of **bass + kick**, not a low-pass of the whole mix.
-- **Rear/front auto-balance** trims the whole rear field to a fixed amount under the front, per song, so every track sits consistently.
+- **Bass** → front + LFE only, **never** wraps. Low frequencies aren't localisable and a bass smeared into the surrounds just muddies the room, so the whole stem is held at the front image and feeds the sub.
+- **Drums** → the body (kick/snare) stays as a front image; only the **decorrelated** part of the kit — cymbal wash, room, overheads — spills a gentle amount to the *same-side* surround, never to the backs. That keeps the beat solid up front while the air of the kit opens sideways.
+- **Vocals (lead)** → the direct voice is anchored to the **centre/front** (how much folds to FC vs. FL/FR is the preset's `vocal_center`). A short-delay **doubled** vocal (two takes hard-panned) is detected by GCC-PHAT and then kept *fully* forward — spreading a doubled take into the surrounds would comb-filter and hollow the voice out.
+- **Other / guitar / piano** → the dry, localisable **direct** part is held up front; its **ambient** wraps sides + backs + heights, and **how far it wraps is decided per song** from the stem's measured diffuseness + pan — no instrument labels. A dry, centred guitar stays forward; a reverberant or hard-panned guitar/synth pushes much more of itself to the sides/backs, and a near-fully-diffuse pad ends up mostly behind you. The same instrument can therefore sit front in one song and wrap the room in the next.
+- **Backing vocals** (only when the karaoke split ran) → treated as their **own** content, so they wrap the rears full-range with no phase risk. A quiet front anchor keeps word transitions from jumping, and the full clean vocal is laid underneath as a low **bed** to mask any artifacts from the split.
+- **Heights (7.1.2)** are fed from the **decorrelated ambient** of the texture stems, high-passed (preset `height_hp`) — real height channels want *air*, not just treble, so a low-passed copy of the mix would sound wrong overhead.
+- **LFE** is built from the genuine low end of **bass + kick**, band-limited at the preset's crossover — not a low-pass of the entire mix, which would dump vocals and cymbals into the sub.
+- **Rear/front auto-balance** measures the finished rear field against the front and trims it to a fixed amount under the front (the preset's `rear_below_front`), **per song** — so a busy, ambient track and a dry one both land at the same front-to-back balance instead of one wrapping too loud.
 
-5.1 and 7.1 are written as 24-bit **FLAC**; 7.1.2 (10 ch) as a 24-bit **WAV** with a correct `WAVEFORMATEXTENSIBLE` channel mask so players route the ten channels right.
+**Output files:** 5.1 and 7.1 are written as 24-bit **FLAC**; 7.1.2 (10 ch) as a 24-bit **WAV** carrying a correct `WAVEFORMATEXTENSIBLE` channel mask, so players route all ten channels to the right speakers (FLAC has no standard 10-channel mask, hence WAV there).
 
 ---
 
