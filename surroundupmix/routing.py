@@ -25,35 +25,48 @@ TEXTURE = ("other", "guitar", "piano")
 
 
 class Channels:
-    """Lazy per-channel accumulator over a fixed layout."""
+    """Lazy per-channel accumulator over a fixed layout.
+
+    Two layers: `data` holds the automatically-placed material (which the
+    front/rear auto-balance governs) and `forced` holds manual per-stem
+    overrides. Keeping them apart lets the auto-balance measure and trim ONLY
+    the automatic wrap, so a deliberately placed source is never fought or
+    over-corrected by the global balance. The output is data + forced.
+    """
 
     def __init__(self, fmt, n):
         self.fmt = fmt
         self.n = n
         self.data = {ch: np.zeros(n, dtype=np.float32) for ch in LAYOUTS[fmt]}
+        self.forced = {ch: np.zeros(n, dtype=np.float32) for ch in LAYOUTS[fmt]}
 
-    def add(self, ch, arr, gain_db=0.0):
+    def add(self, ch, arr, gain_db=0.0, forced=False):
         if ch not in self.data or arr is None:
             return
+        target = self.forced if forced else self.data
         g = db_to_lin(gain_db)
         m = min(self.n, len(arr))
         if g == 1.0:
-            self.data[ch][:m] += arr[:m]
+            target[ch][:m] += arr[:m]
         else:
-            self.data[ch][:m] += arr[:m] * g
+            target[ch][:m] += arr[:m] * g
+
+    def total(self, ch):
+        """The full signal for a channel: automatic + forced."""
+        return self.data[ch] + self.forced[ch]
 
 
-def _route_direct(chans, name, direct, p):
+def _route_direct(chans, name, direct, p, forced=False):
     """DIRECT -> front image."""
     if name == "vocals":
         c = float(p["vocal_center"])
         g = p["vocal_front"]
-        chans.add("FC", 0.5 * (direct.L + direct.R), g + _c2db(c))
-        chans.add("FL", direct.L, g + _c2db(1 - c))
-        chans.add("FR", direct.R, g + _c2db(1 - c))
+        chans.add("FC", 0.5 * (direct.L + direct.R), g + _c2db(c), forced=forced)
+        chans.add("FL", direct.L, g + _c2db(1 - c), forced=forced)
+        chans.add("FR", direct.R, g + _c2db(1 - c), forced=forced)
     else:
-        chans.add("FL", direct.L, 0.0)
-        chans.add("FR", direct.R, 0.0)
+        chans.add("FL", direct.L, 0.0, forced=forced)
+        chans.add("FR", direct.R, 0.0, forced=forced)
 
 
 def _c2db(frac):
@@ -189,19 +202,20 @@ def _route_forced(chans, name, direct, ambient, zone, p, sr):
     fmt = chans.fmt
     sl, sr_ch = side_pair(fmt)
     bl, br = surround_pair(fmt)
+    # everything here goes to the FORCED layer, so the auto-balance leaves it be
     if zone == "front":
-        _route_direct(chans, name, direct, p)
-        chans.add("FL", ambient.L, -3.0)
-        chans.add("FR", ambient.R, -3.0)
+        _route_direct(chans, name, direct, p, forced=True)
+        chans.add("FL", ambient.L, -3.0, forced=True)
+        chans.add("FR", ambient.R, -3.0, forced=True)
     elif zone == "side":
-        chans.add(sl, direct.L, 0.0); chans.add(sr_ch, direct.R, 0.0)
-        chans.add(sl, ambient.L, 0.0); chans.add(sr_ch, ambient.R, 0.0)
+        chans.add(sl, direct.L, 0.0, forced=True); chans.add(sr_ch, direct.R, 0.0, forced=True)
+        chans.add(sl, ambient.L, 0.0, forced=True); chans.add(sr_ch, ambient.R, 0.0, forced=True)
     elif zone == "rear":
-        chans.add(bl, direct.L, 0.0); chans.add(br, direct.R, 0.0)
-        chans.add(bl, ambient.L, 0.0); chans.add(br, ambient.R, 0.0)
+        chans.add(bl, direct.L, 0.0, forced=True); chans.add(br, direct.R, 0.0, forced=True)
+        chans.add(bl, ambient.L, 0.0, forced=True); chans.add(br, ambient.R, 0.0, forced=True)
         if has_heights(fmt):
-            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), -3.0)
-            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), -3.0)
+            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), -3.0, forced=True)
+            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), -3.0, forced=True)
 
 
 def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.0,

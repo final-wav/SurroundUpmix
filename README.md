@@ -114,7 +114,7 @@ Key options (both CLIs): `--rear-gain` (taste offset on the rear field), `--rear
 
 **Auto-place (per song, no labels):** Demucs never tells you a sound is a "trumpet" — that's baked into `other` — and "should be behind me" is artistic intent, not something in the signal. So the engine doesn't guess instruments; it reacts to *measurable* per-stem behaviour. For each texture stem it measures its **diffuseness** (how decorrelated it is) and its **pan**, and adapts how far its ambient wraps: a dry, centred guitar/piano is held forward automatically, while a reverberant or clearly panned part wraps further to the sides/back — song by song. Tunable per preset (`ap_k`, `ap_d0`, `ap_kp`, `ap_p0`); set `auto_place=False` to fall back to fixed preset dB.
 
-**Manual overrides (taste decisions a metric can't make):** force any stem into a zone — `--place-guitar rear`, `--place-piano side`, `--place-other front`, etc. (`auto | front | side | rear`, default `auto`). In the GUI: the **Placement per stem** row. `auto` uses the auto-place layer; the others put that whole stem (its direct source *and* its ambient) into the chosen zone.
+**Manual overrides (taste decisions a metric can't make):** force any stem into a zone — `--place-guitar rear`, `--place-piano side`, `--place-other front`, etc. (`auto | front | side | rear`, default `auto`). In the GUI: the **Placement per stem** row. `auto` uses the auto-place layer; the others put that whole stem (its direct source *and* its ambient) into the chosen zone. A forced placement is **exempt from the front/rear auto-balance** — the balance governs only the automatic wrap, so a stem you deliberately push to the rear stays at the level you asked for instead of being trimmed back down.
 
 ---
 

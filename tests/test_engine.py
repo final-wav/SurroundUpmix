@@ -20,9 +20,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from surroundupmix.io import Stereo, write_surround
 from surroundupmix.layouts import LAYOUTS, channel_mask
 from surroundupmix import decompose as dc
+from surroundupmix import presets as _presets
 from surroundupmix.detect import classify_vocal_width
 from surroundupmix.engine import upmix_folder
 from surroundupmix.inputs import expand_inputs, looks_like_stems
+from surroundupmix.routing import spatialize, _auto_place
+from surroundupmix.balance import auto_balance, normalize
 
 SR = 44100
 
@@ -214,6 +217,96 @@ def test_expand_files_folders_and_stems():
 
         # duplicates removed
         assert len(expand_inputs([os.path.join(d, "a.flac")] * 3)) == 1
+
+
+# ----------------------------------------------------------------- auto-place
+def test_auto_place_reacts_to_diffuseness():
+    """A diffuse stem must be told to wrap MORE than a dry, mono one."""
+    p = _presets.get("immersive")
+    rng = np.random.default_rng(0)
+    n = SR
+    m = (rng.standard_normal(n) * 0.2).astype("float32")
+    dry = Stereo(np.stack([m, m], 1), SR)               # coherent / dry
+    wet = Stereo((rng.standard_normal((n, 2)) * 0.2).astype("float32"), SR)  # decorrelated
+    dd, da = dc.decompose(dry)
+    wd, wa = dc.decompose(wet)
+    _, dry_back, _ = _auto_place(dd, da, p)
+    _, wet_back, _ = _auto_place(wd, wa, p)
+    assert wet_back > dry_back + 2.0, "diffuse content must wrap more than dry"
+
+
+def test_auto_place_disabled_is_neutral():
+    p = _presets.get("immersive"); p["auto_place"] = False
+    rng = np.random.default_rng(1)
+    st = Stereo((rng.standard_normal((SR, 2)) * 0.2).astype("float32"), SR)
+    d, a = dc.decompose(st)
+    assert _auto_place(d, a, p) == (0.0, 0.0, 0.0)
+
+
+# ------------------------------------------------------- per-stem overrides
+def _guitar_stems():
+    t = np.arange(SR) / SR
+    g = (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32")   # dry -> normally front
+    return {"guitar": Stereo(np.stack([g, g], 1), SR)}
+
+
+def test_forced_rear_moves_stem_to_rear():
+    p = _presets.get("immersive")
+    stems = _guitar_stems()
+    auto = spatialize(stems, "7.1", p, SR, place={"guitar": "auto"})
+    front_a = _rms(auto.total("FL")) + _rms(auto.total("FR"))
+    rear_a = sum(_rms(auto.total(c)) for c in ("BL", "BR", "SL", "SR"))
+    assert front_a > rear_a, "a dry guitar auto-places mostly to the front"
+
+    rear = spatialize(stems, "7.1", p, SR, place={"guitar": "rear"})
+    front_r = _rms(rear.total("FL")) + _rms(rear.total("FR"))
+    rear_r = sum(_rms(rear.total(c)) for c in ("BL", "BR"))
+    assert rear_r > front_r * 4, "forced rear must dominate the back speakers"
+    # and it lives in the FORCED layer, not the automatic one
+    assert _rms(rear.forced["BL"]) + _rms(rear.forced["BR"]) > 0.05
+    assert _rms(rear.data["BL"]) + _rms(rear.data["BR"]) < 1e-6
+
+
+def test_forced_front_keeps_out_of_rear():
+    p = _presets.get("immersive")
+    ch = spatialize(_guitar_stems(), "7.1", p, SR, place={"guitar": "front"})
+    rear = sum(_rms(ch.total(c)) for c in ("BL", "BR", "SL", "SR"))
+    front = _rms(ch.total("FL")) + _rms(ch.total("FR"))
+    assert front > 0.05 and rear < 1e-6
+
+
+def test_forced_rear_survives_autobalance():
+    """The fix: a forced-rear stem is NOT slammed down by the global balance,
+    and the automatic wrap of other stems is left essentially untouched."""
+    p = _presets.get("immersive")
+    rng = np.random.default_rng(3)
+    t = np.arange(SR) / SR
+    voc = (0.3 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+    g = (0.3 * np.sin(2 * np.pi * 440 * t)).astype("float32")
+    stems = {
+        "vocals": Stereo(np.stack([voc, voc], 1), SR),
+        "other": Stereo((rng.standard_normal((SR, 2)) * 0.12).astype("float32"), SR),
+        "guitar": Stereo(np.stack([g * 0.9, g], 1), SR),
+    }
+
+    def auto_wrap(place):
+        ch = spatialize(stems, "7.1", p, SR, place=place)
+        auto_balance(ch, p["rear_below_front"])
+        normalize(ch, -0.1)
+        return ch
+
+    base = auto_wrap({"guitar": "auto"})
+    forced = auto_wrap({"guitar": "rear"})
+
+    # forced guitar stays prominent in the rear (not pushed ~15 dB under front)
+    fr = sum(_rms(forced.total(c)) for c in ("BL", "BR"))
+    ff = sum(_rms(forced.total(c)) for c in ("FL", "FR", "FC"))
+    assert 20 * np.log10((fr + 1e-12) / (ff + 1e-12)) > -6.0
+
+    # the automatic wrap (other) is essentially unchanged by the override
+    aw_base = sum(_rms(base.data[c]) for c in ("BL", "BR", "SL", "SR"))
+    aw_forced = sum(_rms(forced.data[c]) for c in ("BL", "BR", "SL", "SR"))
+    assert abs(20 * np.log10((aw_forced + 1e-12) / (aw_base + 1e-12))) < 2.0
 
 
 def _run_all():

@@ -26,9 +26,14 @@ def build_lfe(stems, cross, sr, gain_db=-3.0):
 
 
 def auto_balance(chans, rear_below_front, rear_gain=0.0):
-    """Trim the whole rear field to sit `rear_below_front` dB under the front,
-    per song (front/rear material differs track to track). `rear_gain` is the
-    user's taste offset on top. Modifies channels in place; returns info dict.
+    """Trim the automatic rear field to sit `rear_below_front` dB under the
+    front, per song (front/rear material differs track to track). `rear_gain`
+    is the user's taste offset on top.
+
+    Only the AUTOMATIC layer (`chans.data`) is measured and trimmed - manually
+    forced per-stem placements live in `chans.forced` and are deliberately left
+    untouched, so a source you put in the rear is not fought or over-corrected
+    by the global balance. Modifies channels in place; returns info dict.
     """
     if rear_below_front <= 0:
         return {"applied": False}
@@ -49,10 +54,11 @@ def auto_balance(chans, rear_below_front, rear_gain=0.0):
 
 def normalize(chans, peak_db=-0.1):
     """Peak-normalise all channels together to `peak_db` dBFS (LFE included,
-    matching the old single 'gain -n' over the merged file)."""
+    matching the old single 'gain -n' over the merged file). Peak is taken over
+    the full signal (automatic + forced) and both layers are scaled equally."""
     peak = 0.0
     for c in LAYOUTS[chans.fmt]:
-        arr = chans.data[c]
+        arr = chans.total(c)
         if arr is not None and len(arr):
             peak = max(peak, float(np.max(np.abs(arr))))
     if peak <= 0:
@@ -60,4 +66,5 @@ def normalize(chans, peak_db=-0.1):
     g = db_to_lin(peak_db) / peak
     for c in LAYOUTS[chans.fmt]:
         chans.data[c] *= g
+        chans.forced[c] *= g
     return g

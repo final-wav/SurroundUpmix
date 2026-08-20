@@ -79,7 +79,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     os.makedirs(out_dir, exist_ok=True)
     track_label = track_label or os.path.basename(os.path.normpath(stems_folder))
     base = os.path.join(out_dir, "%s_%s" % (track_label, fmt))
-    channels = {c: chans.data[c] for c in LAYOUTS[fmt]}
+    channels = {c: chans.total(c) for c in LAYOUTS[fmt]}
     out = write_surround(base, channels, fmt, sr, bits=24, force_wav=force_wav)
     _log(verbose, "  wrote %s (%d ch)" % (out, len(LAYOUTS[fmt])))
     return out
