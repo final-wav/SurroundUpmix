@@ -102,6 +102,9 @@ def main(argv=None):
     ap.add_argument("--backing-gain", default="auto")
     ap.add_argument("--keep-stems", action="store_true")
     ap.add_argument("--wav", action="store_true")
+    ap.add_argument("--adm", action="store_true",
+                    help="write a Dolby-Atmos ADM BWF master (7.1.2 bed, 48 kHz) "
+                         "for the Dolby Atmos Renderer instead of FLAC/WAV")
     for stem in PLACE_STEMS:
         ap.add_argument("--place-%s" % stem, default="auto", choices=PLACE_ZONES,
                         help="force %s to a zone (auto = song-adaptive)" % stem)
@@ -117,7 +120,8 @@ def main(argv=None):
     work = args.work_dir or os.path.join(song_dir, "SurroundUpmix_work")
     sep = os.path.join(work, "stems")
     os.makedirs(sep, exist_ok=True)
-    out_dir = args.out_dir or os.path.join(song_dir, "Final_%s" % args.format)
+    out_dir = args.out_dir or os.path.join(
+        song_dir, "Final_Atmos" if args.adm else "Final_%s" % args.format)
 
     demucs = resolve_demucs(args.demucs_cmd)
     if not demucs:
@@ -153,12 +157,14 @@ def main(argv=None):
         elif args.split_vocals == "on":
             print("  (split requested but unavailable - continuing without it)")
 
-    print("==== Upmixing to %s ====" % args.format)
+    print("==== Upmixing to %s ====" % ("Atmos ADM BWF (7.1.2 bed)" if args.adm
+                                        else args.format))
     out = upmix_folder(
         stems_dir, fmt=args.format, preset=args.preset, out_dir=out_dir,
         track_label=track, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
-        backing_gain=args.backing_gain, force_wav=args.wav, place=place)
+        backing_gain=args.backing_gain, force_wav=args.wav, place=place,
+        adm=args.adm)
 
     if not args.keep_stems:
         shutil.rmtree(work, ignore_errors=True)

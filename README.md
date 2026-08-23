@@ -118,12 +118,29 @@ Key options (both CLIs): `--rear-gain` (taste offset on the rear field), `--rear
 
 ---
 
+## Dolby Atmos export (ADM BWF)
+
+Add `--adm` (CLI) or pick **Export → Dolby Atmos (ADM BWF)** in the GUI to write a **Dolby-Atmos ADM BWF master** instead of a plain FLAC/WAV:
+
+```bash
+python allinone.py "song.flac" --adm --device cuda
+```
+
+It writes a **7.1.2 bed** as an RF64/BW64 file with ITU-R BS.2076 `axml` + `chna` metadata (room-centric Cartesian speaker positions), **resampled to 48 kHz** (an Atmos requirement) — modelled on a real Dolby Atmos master. The file **opens directly in the Dolby Atmos Renderer**, in the correct bed order (side surrounds before rears), so there's **no manual channel mapping**. From the Renderer you can monitor it on a 7.1.2 rig or export a binaural re-render for headphones.
+
+The bed channel order is Dolby's `L R C LFE  Lss Rss  Lrs Rrs  Lts Rts` (the engine's `SL/SR` → side surrounds, `BL/BR` → rear surrounds, `TFL/TFR` → top surrounds). `--adm` forces the 7.1.2 layout regardless of `--format`.
+
+> This writes the open ADM BWF only. The final **E-AC-3 / JOC** encode (Dolby Digital Plus + Atmos, e.g. the `.m4a` you stream) is a proprietary Dolby step done **in the Dolby Atmos Renderer / a Dolby encoder** — not something any free tool (ffmpeg included) can produce.
+
+---
+
 ## Layout
 
 ```
 surroundupmix/          # the engine (a normal Python package)
   layouts.py            # speaker layouts + WAVE channel masks
   io.py                 # load stems, write FLAC / WAV-extensible
+  adm.py                # write Dolby-Atmos ADM BWF (7.1.2 bed, axml + chna)
   decompose.py          # direct/ambient split (the core), pan, coherence
   detect.py             # doubled-vocal classifier (GCC-PHAT)
   dsp.py                # filters, gain, mono

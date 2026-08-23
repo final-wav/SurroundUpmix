@@ -20,8 +20,15 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
-                 verbose=True):
-    """Upmix a Demucs stems folder. Returns the output path."""
+                 adm=False, adm_bits=24, verbose=True):
+    """Upmix a Demucs stems folder. Returns the output path.
+
+    adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
+    opens directly in the Dolby Atmos Renderer - no channel mapping. It forces
+    the 7.1.2 layout and resamples to 48 kHz if needed (Atmos requirement).
+    """
+    if adm:
+        fmt = "7.1.2"   # the Atmos bed is 7.1.2
     stems, sr = load_stems(stems_folder)
     p = _presets.get(preset)
     if rear_below_front is not None:
@@ -78,8 +85,27 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                                       "Final_%s" % fmt)
     os.makedirs(out_dir, exist_ok=True)
     track_label = track_label or os.path.basename(os.path.normpath(stems_folder))
-    base = os.path.join(out_dir, "%s_%s" % (track_label, fmt))
     channels = {c: chans.total(c) for c in LAYOUTS[fmt]}
+
+    if adm:
+        from .adm import write_adm_bwf
+        sr_out = sr
+        if sr != 48000:                       # Atmos requires 48 kHz
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(48000, sr)
+            up, down = 48000 // g, sr // g
+            channels = {k: resample_poly(v, up, down).astype(np.float32)
+                        for k, v in channels.items()}
+            _log(verbose, "  resampled %d -> 48000 Hz (Atmos)" % sr)
+            sr_out = 48000
+        base = os.path.join(out_dir, "%s_atmos" % track_label)
+        out = write_adm_bwf(base, channels, sr_out, objects=None,
+                            bits=adm_bits, program_name=track_label)
+        _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed, %d-bit)" % (out, adm_bits))
+        return out
+
+    base = os.path.join(out_dir, "%s_%s" % (track_label, fmt))
     out = write_surround(base, channels, fmt, sr, bits=24, force_wav=force_wav)
     _log(verbose, "  wrote %s (%d ch)" % (out, len(LAYOUTS[fmt])))
     return out

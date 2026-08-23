@@ -56,6 +56,7 @@ DEVICES = ["auto", "cuda", "cpu"]
 SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
 MODELS = ["htdemucs_ft", "htdemucs_6s"]  # 6s adds guitar + piano stems (slower, no _ft, weak piano)
+EXPORT = ["surround file", "Dolby Atmos (ADM BWF)"]
 
 PRESET_DESC = {
     "focus":     "Vocal-forward, subtle wrap. Lead sits firmly in the centre, rears quietest. "
@@ -88,6 +89,10 @@ TIPS = {
     "Demucs model": "htdemucs_ft = 4 stems (bass/drums/vocals/other), best quality (default). "
                     "htdemucs_6s also separates guitar + piano for individual placement "
                     "(slower, no _ft, weaker piano).",
+    "Export": "surround file = FLAC / WAV (5.1 / 7.1 / 7.1.2).  Dolby Atmos (ADM BWF) = a "
+              "7.1.2-bed master at 48 kHz that opens straight in the Dolby Atmos Renderer "
+              "(no channel mapping) - play it on your 7.1.2 rig or export a binaural render. "
+              "Forces the 7.1.2 bed; the final E-AC-3/JOC encode is done in the Renderer.",
 }
 
 PLACE_TIP = ("Where each instrument goes.\n"
@@ -264,6 +269,7 @@ class App:
         self.rear_below = self._entry(opt, "Rear below front", "", 1, 2, TIPS["Rear below front"])
         self.backing = self._entry(opt, "Backing gain", "auto", 1, 3, TIPS["Backing gain"])
         self.model, _ = self._combo(opt, "Demucs model", MODELS, "htdemucs_ft", 2, 0, TIPS["Demucs model"])
+        self.export, _ = self._combo(opt, "Export", EXPORT, "surround file", 2, 1, TIPS["Export"])
         orow = ttk.Frame(opt)
         orow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         ttk.Label(orow, text="Output folder  (blank = next to each song)",
@@ -429,6 +435,8 @@ class App:
             v = var.get()
             if v and v != "auto":
                 cmd += ["--place-%s" % stem, v]
+        if self.export.get().startswith("Dolby Atmos"):
+            cmd += ["--adm"]
         return cmd
 
     def _start(self):

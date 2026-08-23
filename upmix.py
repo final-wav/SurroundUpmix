@@ -34,6 +34,9 @@ def main(argv=None):
     ap.add_argument("--norm-level", type=float, default=-0.1)
     ap.add_argument("--wav", action="store_true",
                     help="force WAV output even for <=8 channels")
+    ap.add_argument("--adm", action="store_true",
+                    help="write a Dolby-Atmos ADM BWF master (7.1.2 bed, 48 kHz) "
+                         "for the Dolby Atmos Renderer instead of FLAC/WAV")
     ap.add_argument("-q", "--quiet", action="store_true")
     _place_stems = ("vocals", "bass", "drums", "other", "guitar", "piano")
     for stem in _place_stems:
@@ -50,7 +53,8 @@ def main(argv=None):
             rear_gain=args.rear_gain, rear_below_front=args.rear_below_front,
             vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
             lfe_cross=args.lfe_cross, norm_level=args.norm_level,
-            force_wav=args.wav, place=place, verbose=not args.quiet)
+            force_wav=args.wav, place=place, adm=args.adm,
+            verbose=not args.quiet)
     except Exception as e:
         print("ERROR:", e, file=sys.stderr)
         return 1
