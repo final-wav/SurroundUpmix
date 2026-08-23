@@ -118,6 +118,14 @@ Key options (both CLIs): `--rear-gain` (taste offset on the rear field), `--rear
 
 ---
 
+## Brilliance — HF air restore
+
+Neural separators (Demucs included) lose the top octave: the stems no longer sum back to the master, and the first casualty is the **air ~9–21 kHz** — so a split-and-recombine can sound dull. The full chain fixes this by **reinjecting the original master's highs**: below a crossover it keeps the spatialised stem signal, above it uses the master's own top end (little localisation is lost that high), so brilliance survives.
+
+On by default in `allinone.py` (it has the original song). Tunables: `--air-cross 9000` (Hz), `--air-gain 0` (dB), `--no-air` to disable. In the GUI it's the **HF air** box. The restored air goes to the front, with a quiet touch overhead. For a pre-separated stems folder (`upmix.py`) pass `--original <master>` to enable it.
+
+---
+
 ## Dolby Atmos export (ADM BWF)
 
 Add `--adm` (CLI) or pick **Export → Dolby Atmos (ADM BWF)** in the GUI to write a **Dolby-Atmos ADM BWF master** instead of a plain FLAC/WAV:

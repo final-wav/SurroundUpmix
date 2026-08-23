@@ -5,9 +5,9 @@ import numpy as np
 from . import presets as _presets
 from .balance import auto_balance, build_lfe, normalize
 from .detect import classify_vocal_width
-from .dsp import rms
-from .io import load_stems, write_surround
-from .layouts import LAYOUTS
+from .dsp import rms, highpass, db_to_lin
+from .io import load, load_stems, write_surround
+from .layouts import LAYOUTS, has_heights
 from .routing import spatialize
 
 
@@ -16,11 +16,30 @@ def _log(verbose, msg):
         print(msg)
 
 
+def _load_original(path, sr, n):
+    """Load the original master as (n, 2) float32 at `sr`, padded/truncated."""
+    try:
+        st = load(path)
+    except Exception:
+        return None
+    data = st.data
+    if st.sr != sr:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(sr, st.sr)
+        data = resample_poly(data, sr // g, st.sr // g, axis=0).astype(np.float32)
+    if len(data) < n:
+        data = np.concatenate([data, np.zeros((n - len(data), 2), np.float32)])
+    return data[:n]
+
+
 def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
-                 adm=False, adm_bits=24, verbose=True):
+                 adm=False, adm_bits=24, original=None, air=True,
+                 air_cross=9000.0, air_gain=0.0, air_heights_db=-12.0,
+                 verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
 
     adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
@@ -71,6 +90,31 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     # LFE
     lfe = build_lfe(stems, p["lfe_cross"], sr)
     chans.data["LFE"][:len(lfe)] += lfe[:chans.n]
+
+    # HF air restore: neural separation loses the top octave and the stems no
+    # longer sum to the master, so brilliance (~9-21 kHz) goes missing. Reinject
+    # the ORIGINAL master's highs: below the crossover keep the spatialised stem
+    # signal, above it use the master's own top end (little localisation is lost
+    # up there). Added to the FORCED layer so the auto-balance leaves it alone.
+    if air and original is not None:
+        orig = _load_original(original, sr, chans.n)
+        if orig is not None:
+            ag = db_to_lin(air_gain)
+            aL = highpass(orig[:, 0], air_cross, sr) * ag
+            aR = highpass(orig[:, 1], air_cross, sr) * ag
+            # swap the attenuated stem highs for the master's highs (front)
+            chans.add("FL", aL - highpass(chans.total("FL"), air_cross, sr),
+                      0.0, forced=True)
+            chans.add("FR", aR - highpass(chans.total("FR"), air_cross, sr),
+                      0.0, forced=True)
+            # a touch of that air overhead (heights want air, not just treble)
+            if has_heights(fmt) and air_heights_db > -60:
+                chans.add("TFL", aL, air_heights_db, forced=True)
+                chans.add("TFR", aR, air_heights_db, forced=True)
+            _log(verbose, "  HF air restored from original above %d Hz"
+                 % int(air_cross))
+        else:
+            _log(verbose, "  (air restore: could not read original - skipped)")
 
     # front/rear auto-balance
     info = auto_balance(chans, p["rear_below_front"], rear_gain)

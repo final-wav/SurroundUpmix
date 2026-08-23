@@ -105,6 +105,13 @@ def main(argv=None):
     ap.add_argument("--adm", action="store_true",
                     help="write a Dolby-Atmos ADM BWF master (7.1.2 bed, 48 kHz) "
                          "for the Dolby Atmos Renderer instead of FLAC/WAV")
+    ap.add_argument("--no-air", action="store_true",
+                    help="disable HF air restore (reinjecting the original's highs "
+                         "to counter Demucs' lost brilliance)")
+    ap.add_argument("--air-cross", type=float, default=9000.0,
+                    help="air-restore crossover in Hz (default 9000)")
+    ap.add_argument("--air-gain", type=float, default=0.0,
+                    help="gain (dB) on the restored air (default 0)")
     for stem in PLACE_STEMS:
         ap.add_argument("--place-%s" % stem, default="auto", choices=PLACE_ZONES,
                         help="force %s to a zone (auto = song-adaptive)" % stem)
@@ -164,7 +171,8 @@ def main(argv=None):
         track_label=track, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
         backing_gain=args.backing_gain, force_wav=args.wav, place=place,
-        adm=args.adm)
+        adm=args.adm, original=song, air=not args.no_air,
+        air_cross=args.air_cross, air_gain=args.air_gain)
 
     if not args.keep_stems:
         shutil.rmtree(work, ignore_errors=True)

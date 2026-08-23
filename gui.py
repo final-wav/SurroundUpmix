@@ -57,6 +57,7 @@ SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
 MODELS = ["htdemucs_ft", "htdemucs_6s"]  # 6s adds guitar + piano stems (slower, no _ft, weak piano)
 EXPORT = ["surround file", "Dolby Atmos (ADM BWF)"]
+AIR = ["on", "off"]
 
 PRESET_DESC = {
     "focus":     "Vocal-forward, subtle wrap. Lead sits firmly in the centre, rears quietest. "
@@ -93,6 +94,10 @@ TIPS = {
               "7.1.2-bed master at 48 kHz that opens straight in the Dolby Atmos Renderer "
               "(no channel mapping) - play it on your 7.1.2 rig or export a binaural render. "
               "Forces the 7.1.2 bed; the final E-AC-3/JOC encode is done in the Renderer.",
+    "HF air": "Demucs loses the top octave, so the split+recombine sounds dull (~9-21 kHz). "
+              "on = reinject the ORIGINAL master's highs above the crossover so brilliance "
+              "survives. Only works on song jobs (needs the original); no effect on a "
+              "pre-separated stems folder.",
 }
 
 PLACE_TIP = ("Where each instrument goes.\n"
@@ -270,6 +275,7 @@ class App:
         self.backing = self._entry(opt, "Backing gain", "auto", 1, 3, TIPS["Backing gain"])
         self.model, _ = self._combo(opt, "Demucs model", MODELS, "htdemucs_ft", 2, 0, TIPS["Demucs model"])
         self.export, _ = self._combo(opt, "Export", EXPORT, "surround file", 2, 1, TIPS["Export"])
+        self.air, _ = self._combo(opt, "HF air", AIR, "on", 2, 2, TIPS["HF air"])
         orow = ttk.Frame(opt)
         orow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
         ttk.Label(orow, text="Output folder  (blank = next to each song)",
@@ -437,6 +443,8 @@ class App:
                 cmd += ["--place-%s" % stem, v]
         if self.export.get().startswith("Dolby Atmos"):
             cmd += ["--adm"]
+        if self.air.get() == "off":
+            cmd += ["--no-air"]
         return cmd
 
     def _start(self):
