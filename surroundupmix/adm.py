@@ -20,18 +20,19 @@ import numpy as np
 
 # Bed: (our channel name, speakerLabel, channelFormatName, X, Y, Z)
 # Z is None for floor channels (no <position Z> element, matching the reference).
-# Standard Dolby 7.1.2 bed order (what Studio One and the Dolby Atmos Renderer
-# expect): L R C LFE  Lss Rss (sides)  Lrs Rrs (rears)  Ltm Rtm (top middle).
-# Our engine's SL/SR -> side surrounds, BL/BR -> rear surrounds, TFL/TFR -> tops.
+# Bed order VERIFIED by the user's speaker-ID playback test: rear surrounds at
+# positions 5/6, side surrounds at 7/8, top middle at 9/10 (the Microsoft/WAVE
+# 7.1 convention their players route by). Do NOT reorder to "Dolby sides-first"
+# - it swaps rear<->side in their playback.
 BED = [
     ("FL",  "RC_L",   "RoomCentricLeft",             -1.0,  1.0, None),
     ("FR",  "RC_R",   "RoomCentricRight",             1.0,  1.0, None),
     ("FC",  "RC_C",   "RoomCentricCenter",            0.0,  1.0, None),
     ("LFE", "RC_LFE", "RoomCentricLFE",              -1.0,  1.0, -1.0),
-    ("SL",  "RC_Lss", "RoomCentricLeftSideSurround", -1.0,  0.0, None),
-    ("SR",  "RC_Rss", "RoomCentricRightSideSurround", 1.0,  0.0, None),
     ("BL",  "RC_Lrs", "RoomCentricLeftRearSurround", -1.0, -1.0, None),
     ("BR",  "RC_Rrs", "RoomCentricRightRearSurround", 1.0, -1.0, None),
+    ("SL",  "RC_Lss", "RoomCentricLeftSideSurround", -1.0,  0.0, None),
+    ("SR",  "RC_Rss", "RoomCentricRightSideSurround", 1.0,  0.0, None),
     ("TFL", "RC_Ltm", "RoomCentricLeftTopMiddle",    -1.0,  0.0,  1.0),
     ("TFR", "RC_Rtm", "RoomCentricRightTopMiddle",    1.0,  0.0,  1.0),
 ]

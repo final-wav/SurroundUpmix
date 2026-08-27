@@ -136,7 +136,7 @@ python allinone.py "song.flac" --adm --device cuda
 
 It writes a **bed-based 7.1.2** RF64/BW64 file — all audio in the ten bed channels (no objects) — with ITU-R BS.2076 `axml` + `chna` metadata, a valid Dolby `dbmd` metadata chunk, **resampled to 48 kHz** (an Atmos requirement). The `dbmd` generator is ported from Cavern (VoidXH, open source) and verified byte-exact against a real Dolby Atmos master, so the file is a self-contained Atmos master — **no Cavern or extra tool needed**.
 
-The bed channel order is Dolby's standard `L R C LFE  Lss Rss  Lrs Rrs  Ltm Rtm` (the engine's `SL/SR` → side surrounds, `BL/BR` → rear surrounds, `TFL/TFR` → top middle), so it **imports cleanly as a 7.1.2 bed** in Studio One / the Dolby Atmos Renderer. `--adm` forces the 7.1.2 layout regardless of `--format`.
+The bed channel order is `L R C LFE  Lrs Rrs (rears)  Lss Rss (sides)  Ltm Rtm (tops)` — the Microsoft/WAVE 7.1 convention (rear pair before side pair) that consumer players route by, verified against playback. `--adm` forces the 7.1.2 layout regardless of `--format`.
 
 > **On playback:** consumer players (VLC, MusicBee) play the raw PCM channels — they route the 7.1 ear-level correctly but **not** the two height channels (a limitation of raw multichannel playback, true even for Studio One's own exports). The height comes through once the master is taken into a Dolby chain (import into Studio One → Dolby Atmos → **E-AC-3 / JOC** encode), which is where the tops become real Atmos height. That final JOC encode is a proprietary Dolby step, not something any free tool produces. For plain 7.1 that plays everywhere, use `--format 7.1` / `7.1.2` (FLAC/WAV) without `--adm`.
 
