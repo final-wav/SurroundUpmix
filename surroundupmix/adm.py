@@ -20,6 +20,9 @@ import numpy as np
 
 # Bed: (our channel name, speakerLabel, channelFormatName, X, Y, Z)
 # Z is None for floor channels (no <position Z> element, matching the reference).
+# Standard Dolby 7.1.2 bed order (what Studio One and the Dolby Atmos Renderer
+# expect): L R C LFE  Lss Rss (sides)  Lrs Rrs (rears)  Ltm Rtm (top middle).
+# Our engine's SL/SR -> side surrounds, BL/BR -> rear surrounds, TFL/TFR -> tops.
 BED = [
     ("FL",  "RC_L",   "RoomCentricLeft",             -1.0,  1.0, None),
     ("FR",  "RC_R",   "RoomCentricRight",             1.0,  1.0, None),
@@ -29,8 +32,8 @@ BED = [
     ("SR",  "RC_Rss", "RoomCentricRightSideSurround", 1.0,  0.0, None),
     ("BL",  "RC_Lrs", "RoomCentricLeftRearSurround", -1.0, -1.0, None),
     ("BR",  "RC_Rrs", "RoomCentricRightRearSurround", 1.0, -1.0, None),
-    ("TFL", "RC_Lts", "RoomCentricLeftTopSurround",  -1.0,  0.0,  1.0),
-    ("TFR", "RC_Rts", "RoomCentricRightTopSurround",  1.0,  0.0,  1.0),
+    ("TFL", "RC_Ltm", "RoomCentricLeftTopMiddle",    -1.0,  0.0,  1.0),
+    ("TFR", "RC_Rtm", "RoomCentricRightTopMiddle",    1.0,  0.0,  1.0),
 ]
 
 
@@ -53,6 +56,60 @@ def _pcm_bytes(interleaved, bits):
     ints = np.round(x * 8388607.0).astype("<i4").reshape(-1)
     b = ints.view(np.uint8).reshape(-1, 4)[:, :3]
     return b.tobytes()
+
+
+def _dbmd_checksum(payload):
+    return (-(len(payload) + sum(payload))) & 0xFF
+
+
+def make_dbmd(channel_count, creation0="Created with SurroundUpmix",
+              creation1="SurroundUpmix v2"):
+    """Build a Dolby audio Metadata (`dbmd`) chunk body for a file with
+    `channel_count` PCM tracks. Ported from Cavern's DolbyMetadata (VoidXH,
+    open source) and verified byte-exact against a real Dolby Atmos master:
+    a version, then Dolby-Digital-Plus, Dolby-Atmos and object-metadata
+    segments, each followed by a two's-complement checksum. The object segment
+    carries the track count (all tracks are objects at the metadata level)."""
+    # Dolby Digital Plus metadata segment (id 7, length 96)
+    ddp = bytearray(96)
+    ddp[1] = 0x47    # programInfo: acmod + LFE
+    ddp[5] = 0x60    # dialnormInfo: protected + original
+    ddp[8] = 0x24    # downmix (-3 dB) high byte
+    ddp[9] = 0x24    # downmix low byte
+    # Dolby Atmos metadata segment (id 9, length 248)
+    atmos = bytearray(248)
+    c0 = creation0.encode("ascii", "ignore")[:32]
+    atmos[0:len(c0)] = c0
+    c1 = creation1.encode("ascii", "ignore")[:32]
+    atmos[32:32 + len(c1)] = c1
+    cwv = [0, 0, 0]
+    dot = 0
+    for ch in creation1:                       # created-with version from digits
+        if ch.isdigit():
+            cwv[dot] = cwv[dot] * 10 + int(ch)
+        elif cwv[dot] != 0:
+            dot += 1
+            if dot == 3:
+                break
+    atmos[96], atmos[97], atmos[98] = cwv
+    atmos[103] = 0x03
+    atmos[106] = 0x01
+    atmos[111] = 0x22    # frame-rate code
+    atmos[112] = 0xFF
+    # object metadata segment (id 10, length 5 + 262 + count)
+    om = bytearray(5 + 262 + channel_count)
+    struct.pack_into("<I", om, 0, 0xF8726FBD)  # preamble
+    om[4] = channel_count & 0xFF
+    for i in range(len(om) - channel_count, len(om)):
+        om[i] = 0x84
+    out = bytearray(struct.pack("<I", 0x01000006))   # version
+    for sid, payload in ((7, bytes(ddp)), (9, bytes(atmos)), (10, bytes(om))):
+        out.append(sid)
+        out += struct.pack("<H", len(payload))
+        out += payload
+        out.append(_dbmd_checksum(payload))
+    out += b"\x00\x00"                                # terminator
+    return bytes(out)
 
 
 def _axml(n_frames, sr, bits, objects, program_name):
@@ -234,7 +291,7 @@ def _chunk(cid, body):
 
 
 def write_adm_bwf(path, channels, sr, objects=None, bits=24,
-                  program_name="SurroundUpmix", object_signals=None):
+                  program_name="SurroundUpmix", object_signals=None, dbmd=None):
     """Write an ADM BWF master.
 
     channels : {name: mono np.array} for the 10 bed channels (our WAVE names
@@ -280,6 +337,9 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
     data = _pcm_bytes(interleaved, bits)
     data_size = len(data)
 
+    if dbmd is None:                        # generate a valid Dolby metadata chunk
+        dbmd = make_dbmd(ch)
+
     fmt_body = struct.pack("<HHIIHH", 0x0001, ch, sr, sr * block_align,
                            block_align, bits)
     axml = _axml(n, sr, bits, objects, program_name)
@@ -288,11 +348,12 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
     fmt_chunk = _chunk(b"fmt ", fmt_body)
     axml_chunk = _chunk(b"axml", axml)
     chna_chunk = _chunk(b"chna", chna)
+    dbmd_chunk = _chunk(b"dbmd", dbmd) if dbmd else b""
     data_pad = b"\x00" if (data_size % 2) else b""
 
     # ds64: riffSize, dataSize, sampleCount, tableLength=0
     after_ds64 = (len(fmt_chunk) + 8 + data_size + len(data_pad)
-                  + len(axml_chunk) + len(chna_chunk))
+                  + len(axml_chunk) + len(chna_chunk) + len(dbmd_chunk))
     ds64_body = struct.pack("<QQQI", 0, data_size, n, 0)   # riffSize patched below
     ds64_chunk = b"ds64" + struct.pack("<I", len(ds64_body)) + ds64_body
     riff_size = 4 + len(ds64_chunk) + after_ds64            # 'WAVE' + chunks
@@ -311,4 +372,6 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
         f.write(data_pad)
         f.write(axml_chunk)
         f.write(chna_chunk)
+        if dbmd_chunk:
+            f.write(dbmd_chunk)
     return path

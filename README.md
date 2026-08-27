@@ -134,11 +134,11 @@ Add `--adm` (CLI) or pick **Export → Dolby Atmos (ADM BWF)** in the GUI to wri
 python allinone.py "song.flac" --adm --device cuda
 ```
 
-It writes a **7.1.2 bed** as an RF64/BW64 file with ITU-R BS.2076 `axml` + `chna` metadata (room-centric Cartesian speaker positions), **resampled to 48 kHz** (an Atmos requirement) — modelled on a real Dolby Atmos master. The file **opens directly in the Dolby Atmos Renderer**, in the correct bed order (side surrounds before rears), so there's **no manual channel mapping**. From the Renderer you can monitor it on a 7.1.2 rig or export a binaural re-render for headphones.
+It writes a **bed-based 7.1.2** RF64/BW64 file — all audio in the ten bed channels (no objects) — with ITU-R BS.2076 `axml` + `chna` metadata, a valid Dolby `dbmd` metadata chunk, **resampled to 48 kHz** (an Atmos requirement). The `dbmd` generator is ported from Cavern (VoidXH, open source) and verified byte-exact against a real Dolby Atmos master, so the file is a self-contained Atmos master — **no Cavern or extra tool needed**.
 
-The bed channel order is Dolby's `L R C LFE  Lss Rss  Lrs Rrs  Lts Rts` (the engine's `SL/SR` → side surrounds, `BL/BR` → rear surrounds, `TFL/TFR` → top surrounds). `--adm` forces the 7.1.2 layout regardless of `--format`.
+The bed channel order is Dolby's standard `L R C LFE  Lss Rss  Lrs Rrs  Ltm Rtm` (the engine's `SL/SR` → side surrounds, `BL/BR` → rear surrounds, `TFL/TFR` → top middle), so it **imports cleanly as a 7.1.2 bed** in Studio One / the Dolby Atmos Renderer. `--adm` forces the 7.1.2 layout regardless of `--format`.
 
-> This writes the open ADM BWF only. The final **E-AC-3 / JOC** encode (Dolby Digital Plus + Atmos, e.g. the `.m4a` you stream) is a proprietary Dolby step done **in the Dolby Atmos Renderer / a Dolby encoder** — not something any free tool (ffmpeg included) can produce.
+> **On playback:** consumer players (VLC, MusicBee) play the raw PCM channels — they route the 7.1 ear-level correctly but **not** the two height channels (a limitation of raw multichannel playback, true even for Studio One's own exports). The height comes through once the master is taken into a Dolby chain (import into Studio One → Dolby Atmos → **E-AC-3 / JOC** encode), which is where the tops become real Atmos height. That final JOC encode is a proprietary Dolby step, not something any free tool produces. For plain 7.1 that plays everywhere, use `--format 7.1` / `7.1.2` (FLAC/WAV) without `--adm`.
 
 ---
 
