@@ -264,7 +264,7 @@ class App:
                     bordercolor=BORDER, padding=(10, 6))
         s.map("Ghost.TButton", background=[("active", BORDER)])
         s.configure("Icon.TButton", background=CARD, foreground=FG,
-                    bordercolor=BORDER, padding=(8, 6), font=("Segoe UI", 11))
+                    bordercolor=BORDER, padding=(7, 3), font=("Segoe UI", 10))
         s.map("Icon.TButton", background=[("active", BORDER)])
         s.configure("Link.TButton", background=PANEL, foreground=FG,
                     bordercolor=PANEL, focusthickness=0, padding=(2, 4),
