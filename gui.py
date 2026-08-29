@@ -153,7 +153,8 @@ class App:
         self.cfg = self._load_cfg()
         root.title("SurroundUpmix")
         root.configure(bg=BG)
-        root.minsize(780, 700)
+        root.geometry("860x800")
+        root.minsize(760, 520)
         self._style()
         self._build()
         self._apply_cfg()
@@ -270,14 +271,34 @@ class App:
                   "direct stays front, ambient wraps",
                   style="Sub.TLabel").pack(anchor="w")
 
-        body = ttk.Frame(self.root, style="Bg.TFrame")
-        body.pack(fill="both", expand=True, padx=18, pady=8)
+        # Scrollable body: the window stays a fixed size and the content scrolls,
+        # so expanding "Advanced" or a longer mode description never grows the
+        # window off-screen (and never makes it jump around).
+        outer = ttk.Frame(self.root, style="Bg.TFrame")
+        outer.pack(fill="both", expand=True)
+        self._canvas = canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
+        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        body = ttk.Frame(canvas, style="Bg.TFrame", padding=(18, 8))
+        self._body_win = canvas.create_window((0, 0), window=body, anchor="nw")
+        body.bind("<Configure>",
+                  lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>",
+                    lambda e: canvas.itemconfigure(self._body_win, width=e.width))
+        canvas.bind_all("<MouseWheel>", self._on_wheel)
 
         self._build_input(body)
         self._build_output(body)
         self._build_advanced(body)
         self._build_actions(body)
         self._build_log(body)
+
+    def _on_wheel(self, event):
+        c = getattr(self, "_canvas", None)
+        if c is not None:
+            c.yview_scroll(int(-event.delta / 120), "units")
 
     # ---- input / queue
     def _build_input(self, body):
@@ -344,7 +365,7 @@ class App:
                 side="left", padx=(0, 6))
         self.mode_desc = tk.StringVar(value=MODE_DESC["Surround file"])
         ttk.Label(oc, textvariable=self.mode_desc, style="Hint.TLabel",
-                  wraplength=900, justify="left").pack(fill="x", pady=(6, 10))
+                  wraplength=700, justify="left").pack(fill="x", pady=(6, 10))
 
         # format / preset / device
         grid = ttk.Frame(oc)
@@ -362,7 +383,7 @@ class App:
 
         self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
         ttk.Label(oc, textvariable=self.preset_desc, style="Hint.TLabel",
-                  wraplength=900, justify="left").pack(fill="x", pady=(8, 10))
+                  wraplength=700, justify="left").pack(fill="x", pady=(8, 10))
 
         # output folder + open icon
         ttk.Label(oc, text="Output folder  (blank = a Final_… folder next to each song)",

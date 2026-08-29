@@ -16,6 +16,14 @@ def _log(verbose, msg):
         print(msg)
 
 
+# HF air restore is ALWAYS applied - it's part of the algorithm, not an option.
+# Neural separation loses the top octave, so the master's highs are reinjected
+# to keep the brilliance. These are fixed, not user knobs.
+_AIR_CROSS = 9000.0       # Hz crossover
+_AIR_GAIN = 0.0           # dB on the restored air
+_AIR_HEIGHTS_DB = -12.0   # a quiet touch overhead
+
+
 def _load_original(path, sr, n):
     """Load the original master as (n, 2) float32 at `sr`, padded/truncated."""
     try:
@@ -37,9 +45,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
-                 adm=False, adm_bits=24, original=None, air=True,
-                 air_cross=9000.0, air_gain=0.0, air_heights_db=-12.0,
-                 verbose=True):
+                 adm=False, adm_bits=24, original=None, verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
 
     adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
@@ -96,32 +102,32 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     # the ORIGINAL master's highs: below the crossover keep the spatialised stem
     # signal, above it use the master's own top end (little localisation is lost
     # up there). Added to the FORCED layer so the auto-balance leaves it alone.
-    if air and original is not None:
+    if original is not None:
         orig = _load_original(original, sr, chans.n)
         if orig is not None:
-            ag = db_to_lin(air_gain)
+            ag = db_to_lin(_AIR_GAIN)
             oL, oR = orig[:, 0], orig[:, 1]
             mid = 0.5 * (oL + oR)          # centred content (the lead vocal lives here)
             sd = 0.5 * (oL - oR)           # stereo-only content
             # L/C/R matrix so the CENTRE (muffled vocal) gets its air back too:
             # FC <- master mid highs, FL/FR <- master side highs. In each front
             # channel, swap the attenuated stem highs for the master's own.
-            aFC = highpass(mid, air_cross, sr) * ag
-            aSD = highpass(sd, air_cross, sr) * ag
-            chans.add("FC", aFC - highpass(chans.total("FC"), air_cross, sr),
+            aFC = highpass(mid, _AIR_CROSS, sr) * ag
+            aSD = highpass(sd, _AIR_CROSS, sr) * ag
+            chans.add("FC", aFC - highpass(chans.total("FC"), _AIR_CROSS, sr),
                       0.0, forced=True)
-            chans.add("FL", aSD - highpass(chans.total("FL"), air_cross, sr),
+            chans.add("FL", aSD - highpass(chans.total("FL"), _AIR_CROSS, sr),
                       0.0, forced=True)
-            chans.add("FR", -aSD - highpass(chans.total("FR"), air_cross, sr),
+            chans.add("FR", -aSD - highpass(chans.total("FR"), _AIR_CROSS, sr),
                       0.0, forced=True)
             # a touch of that air overhead (heights want air, not just treble)
-            if has_heights(fmt) and air_heights_db > -60:
-                chans.add("TFL", highpass(oL, air_cross, sr) * ag,
-                          air_heights_db, forced=True)
-                chans.add("TFR", highpass(oR, air_cross, sr) * ag,
-                          air_heights_db, forced=True)
+            if has_heights(fmt):
+                chans.add("TFL", highpass(oL, _AIR_CROSS, sr) * ag,
+                          _AIR_HEIGHTS_DB, forced=True)
+                chans.add("TFR", highpass(oR, _AIR_CROSS, sr) * ag,
+                          _AIR_HEIGHTS_DB, forced=True)
             _log(verbose, "  HF air restored (L/C/R) from original above %d Hz"
-                 % int(air_cross))
+                 % int(_AIR_CROSS))
         else:
             _log(verbose, "  (air restore: could not read original - skipped)")
 

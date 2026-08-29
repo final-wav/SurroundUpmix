@@ -38,12 +38,8 @@ def main(argv=None):
                     help="write a Dolby-Atmos ADM BWF master (7.1.2 bed, 48 kHz) "
                          "for the Dolby Atmos Renderer instead of FLAC/WAV")
     ap.add_argument("--original", default=None,
-                    help="path to the original master; enables HF air restore "
-                         "(reinject its highs to counter the separator's lost air)")
-    ap.add_argument("--no-air", action="store_true",
-                    help="disable HF air restore even if --original is given")
-    ap.add_argument("--air-cross", type=float, default=9000.0)
-    ap.add_argument("--air-gain", type=float, default=0.0)
+                    help="path to the original master; HF air restore uses it to "
+                         "reinject the highs the separator lost (always applied when given)")
     ap.add_argument("-q", "--quiet", action="store_true")
     _place_stems = ("vocals", "bass", "drums", "other", "guitar", "piano")
     for stem in _place_stems:
@@ -61,9 +57,7 @@ def main(argv=None):
             vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
             lfe_cross=args.lfe_cross, norm_level=args.norm_level,
             force_wav=args.wav, place=place, adm=args.adm,
-            original=args.original, air=not args.no_air,
-            air_cross=args.air_cross, air_gain=args.air_gain,
-            verbose=not args.quiet)
+            original=args.original, verbose=not args.quiet)
     except Exception as e:
         print("ERROR:", e, file=sys.stderr)
         return 1
