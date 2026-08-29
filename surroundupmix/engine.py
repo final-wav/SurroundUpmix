@@ -141,7 +141,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
 
     # write
     out_dir = out_dir or os.path.join(os.path.dirname(os.path.abspath(stems_folder)),
-                                      "Final_%s" % fmt)
+                                      "Output")
     os.makedirs(out_dir, exist_ok=True)
     track_label = track_label or os.path.basename(os.path.normpath(stems_folder))
     channels = {c: chans.total(c) for c in LAYOUTS[fmt]}

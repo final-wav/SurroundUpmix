@@ -404,7 +404,7 @@ class App:
             self._meters.append((lab, cv))
 
         # output folder + open icon
-        ttk.Label(oc, text="Output folder  (blank = a Final_… folder next to each song)",
+        ttk.Label(oc, text="Output folder  (blank = an 'Output' folder next to each song)",
                   style="Muted.TLabel").pack(anchor="w")
         frow = ttk.Frame(oc)
         frow.pack(fill="x", pady=(2, 0))
@@ -568,7 +568,7 @@ class App:
         if od:
             self._open_folder(od)
         else:
-            self._append("! output folder is blank (files go into a Final_… "
+            self._append("! output folder is blank (files go into an 'Output' folder "
                          "folder next to each song)\n")
 
     # ------------------------------------------------------------ queue ops

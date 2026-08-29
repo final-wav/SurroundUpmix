@@ -120,8 +120,7 @@ def main(argv=None):
     work = args.work_dir or os.path.join(song_dir, "SurroundUpmix_work")
     sep = os.path.join(work, "stems")
     os.makedirs(sep, exist_ok=True)
-    out_dir = args.out_dir or os.path.join(
-        song_dir, "Final_Atmos" if args.adm else "Final_%s" % args.format)
+    out_dir = args.out_dir or os.path.join(song_dir, "Output")
 
     demucs = resolve_demucs(args.demucs_cmd)
     if not demucs:
