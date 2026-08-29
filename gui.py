@@ -263,9 +263,11 @@ class App:
         s.configure("Ghost.TButton", background=CARD, foreground=FG,
                     bordercolor=BORDER, padding=(10, 6))
         s.map("Ghost.TButton", background=[("active", BORDER)])
-        # big glyph, tiny vertical padding -> same height as Browse but a large icon
+        # symmetric padding keeps the glyph vertically centred; font 12 makes the
+        # icon clearly visible while staying close to the Browse button's height
         s.configure("Icon.TButton", background=CARD, foreground=FG,
-                    bordercolor=BORDER, padding=(9, 1), font=("Segoe UI", 14))
+                    bordercolor=BORDER, padding=(10, 4), font=("Segoe UI", 12),
+                    anchor="center")
         s.map("Icon.TButton", background=[("active", BORDER)])
         s.map("Icon.TButton", background=[("active", BORDER)])
         s.configure("Link.TButton", background=PANEL, foreground=FG,
