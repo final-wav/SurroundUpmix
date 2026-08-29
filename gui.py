@@ -321,7 +321,7 @@ class App:
                    command=self._add_files).pack(side="left")
         ttk.Button(bar, text="＋ Add folder…", style="Ghost.TButton",
                    command=self._add_folder).pack(side="left", padx=(8, 0))
-        b = ttk.Button(bar, text="📁", style="Icon.TButton", command=self._open_input)
+        b = ttk.Button(bar, text="📁", style="Ghost.TButton", command=self._open_input)
         b.pack(side="left", padx=(8, 0))
         ToolTip(b, "Open the folder of the selected (or first) input in Explorer")
         ttk.Button(bar, text="Remove", style="Ghost.TButton",
@@ -409,7 +409,7 @@ class App:
                                                        expand=True)
         ttk.Button(frow, text="Browse…", style="Ghost.TButton",
                    command=self._browse_out).pack(side="left", padx=(8, 0))
-        b = ttk.Button(frow, text="📁", style="Icon.TButton",
+        b = ttk.Button(frow, text="📁", style="Ghost.TButton",
                        command=self._open_output)
         b.pack(side="left", padx=(6, 0))
         ToolTip(b, "Open the output folder in Explorer")
