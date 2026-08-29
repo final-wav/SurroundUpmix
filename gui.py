@@ -263,8 +263,10 @@ class App:
         s.configure("Ghost.TButton", background=CARD, foreground=FG,
                     bordercolor=BORDER, padding=(10, 6))
         s.map("Ghost.TButton", background=[("active", BORDER)])
+        # big glyph, tiny vertical padding -> same height as Browse but a large icon
         s.configure("Icon.TButton", background=CARD, foreground=FG,
-                    bordercolor=BORDER, padding=(7, 3), font=("Segoe UI", 10))
+                    bordercolor=BORDER, padding=(9, 1), font=("Segoe UI", 14))
+        s.map("Icon.TButton", background=[("active", BORDER)])
         s.map("Icon.TButton", background=[("active", BORDER)])
         s.configure("Link.TButton", background=PANEL, foreground=FG,
                     bordercolor=PANEL, focusthickness=0, padding=(2, 4),
@@ -321,7 +323,7 @@ class App:
                    command=self._add_files).pack(side="left")
         ttk.Button(bar, text="＋ Add folder…", style="Ghost.TButton",
                    command=self._add_folder).pack(side="left", padx=(8, 0))
-        b = ttk.Button(bar, text="📁", style="Ghost.TButton", command=self._open_input)
+        b = ttk.Button(bar, text="📁", style="Icon.TButton", command=self._open_input)
         b.pack(side="left", padx=(8, 0))
         ToolTip(b, "Open the folder of the selected (or first) input in Explorer")
         ttk.Button(bar, text="Remove", style="Ghost.TButton",
@@ -409,7 +411,7 @@ class App:
                                                        expand=True)
         ttk.Button(frow, text="Browse…", style="Ghost.TButton",
                    command=self._browse_out).pack(side="left", padx=(8, 0))
-        b = ttk.Button(frow, text="📁", style="Ghost.TButton",
+        b = ttk.Button(frow, text="📁", style="Icon.TButton",
                        command=self._open_output)
         b.pack(side="left", padx=(6, 0))
         ToolTip(b, "Open the output folder in Explorer")
