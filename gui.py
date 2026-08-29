@@ -263,10 +263,10 @@ class App:
         s.configure("Ghost.TButton", background=CARD, foreground=FG,
                     bordercolor=BORDER, padding=(10, 6))
         s.map("Ghost.TButton", background=[("active", BORDER)])
-        # symmetric padding keeps the glyph vertically centred; font 12 makes the
-        # icon clearly visible while staying close to the Browse button's height
+        # font 12 + ypad 3 measures to exactly the Ghost button height (33 px), so
+        # the folder icon is clearly visible AND flush with the other buttons
         s.configure("Icon.TButton", background=CARD, foreground=FG,
-                    bordercolor=BORDER, padding=(10, 4), font=("Segoe UI", 12),
+                    bordercolor=BORDER, padding=(10, 3), font=("Segoe UI", 12),
                     anchor="center")
         s.map("Icon.TButton", background=[("active", BORDER)])
         s.map("Icon.TButton", background=[("active", BORDER)])
