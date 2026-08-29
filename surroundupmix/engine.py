@@ -100,18 +100,27 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
         orig = _load_original(original, sr, chans.n)
         if orig is not None:
             ag = db_to_lin(air_gain)
-            aL = highpass(orig[:, 0], air_cross, sr) * ag
-            aR = highpass(orig[:, 1], air_cross, sr) * ag
-            # swap the attenuated stem highs for the master's highs (front)
-            chans.add("FL", aL - highpass(chans.total("FL"), air_cross, sr),
+            oL, oR = orig[:, 0], orig[:, 1]
+            mid = 0.5 * (oL + oR)          # centred content (the lead vocal lives here)
+            sd = 0.5 * (oL - oR)           # stereo-only content
+            # L/C/R matrix so the CENTRE (muffled vocal) gets its air back too:
+            # FC <- master mid highs, FL/FR <- master side highs. In each front
+            # channel, swap the attenuated stem highs for the master's own.
+            aFC = highpass(mid, air_cross, sr) * ag
+            aSD = highpass(sd, air_cross, sr) * ag
+            chans.add("FC", aFC - highpass(chans.total("FC"), air_cross, sr),
                       0.0, forced=True)
-            chans.add("FR", aR - highpass(chans.total("FR"), air_cross, sr),
+            chans.add("FL", aSD - highpass(chans.total("FL"), air_cross, sr),
+                      0.0, forced=True)
+            chans.add("FR", -aSD - highpass(chans.total("FR"), air_cross, sr),
                       0.0, forced=True)
             # a touch of that air overhead (heights want air, not just treble)
             if has_heights(fmt) and air_heights_db > -60:
-                chans.add("TFL", aL, air_heights_db, forced=True)
-                chans.add("TFR", aR, air_heights_db, forced=True)
-            _log(verbose, "  HF air restored from original above %d Hz"
+                chans.add("TFL", highpass(oL, air_cross, sr) * ag,
+                          air_heights_db, forced=True)
+                chans.add("TFR", highpass(oR, air_cross, sr) * ag,
+                          air_heights_db, forced=True)
+            _log(verbose, "  HF air restored (L/C/R) from original above %d Hz"
                  % int(air_cross))
         else:
             _log(verbose, "  (air restore: could not read original - skipped)")
