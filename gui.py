@@ -61,16 +61,25 @@ DEVICES = ["auto", "cuda", "cpu"]
 SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
 MODELS = ["htdemucs_ft", "htdemucs_6s"]
-MODES = ["Surround file", "Dolby Atmos"]
+OUTPUTS = ["5.1", "7.1", "7.1.2", "Dolby Atmos"]
 PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
 
-MODE_DESC = {
-    "Surround file": "Plain multichannel FLAC / WAV. Plays anywhere. 5.1 / 7.1 are FLAC, "
-                     "7.1.2 is WAV - its two height channels only reach real speakers on a "
-                     "full Atmos-aware setup.",
-    "Dolby Atmos":   "A self-contained 7.1.2-bed ADM BWF master at 48 kHz (valid Dolby "
-                     "metadata). Import it into Studio One / the Dolby Atmos Renderer to make "
-                     "the height real and encode E-AC-3 / JOC. Forces 7.1.2.",
+OUTPUT_DESC = {
+    "5.1": "6-channel FLAC - plays on any 5.1 system.",
+    "7.1": "8-channel FLAC - plays on any 7.1 system.",
+    "7.1.2": "10-channel WAV with two height channels. The height only reaches "
+             "real speakers on an Atmos-aware setup.",
+    "Dolby Atmos": "A self-contained 7.1.2 ADM BWF master (48 kHz). Import into "
+                   "Studio One / the Dolby Atmos Renderer for real height + encode.",
+}
+
+# a rough 0-5 character profile per preset, drawn as little bars so you can SEE
+# how the presets differ before rendering
+PRESET_METERS = {
+    "focus":     [("Surround wrap", 1), ("Vocal centred", 5), ("Height", 1)],
+    "immersive": [("Surround wrap", 3), ("Vocal centred", 3), ("Height", 2)],
+    "concert":   [("Surround wrap", 4), ("Vocal centred", 2), ("Height", 3)],
+    "envelop":   [("Surround wrap", 5), ("Vocal centred", 1), ("Height", 4)],
 }
 
 PRESET_DESC = {
@@ -85,8 +94,9 @@ PRESET_DESC = {
 }
 
 TIPS = {
-    "Format": "Speaker layout. 5.1 / 7.1 are written as FLAC; 7.1.2 adds two height speakers "
-              "and is written as WAV. (Dolby Atmos always uses 7.1.2.)",
+    "Output": "What to write. 5.1 / 7.1 / 7.1.2 are plain FLAC / WAV that play anywhere; "
+              "Dolby Atmos writes a 7.1.2 ADM BWF master for Studio One / the Dolby Atmos "
+              "Renderer. The line below describes the selected one.",
     "Preset": "Overall character - how much wraps around you and how firmly the vocal is "
               "centred. The line below describes the selected one.",
     "Device": "auto uses your NVIDIA GPU if present (much faster), otherwise the CPU.",
@@ -181,7 +191,7 @@ class App:
         for name, var in self._cfg_vars.items():
             if name in self.cfg:
                 var.set(self.cfg[name])
-        self._on_mode()
+        self._on_output()
         self._on_preset()
 
     def _reg(self, name, var):
@@ -353,27 +363,15 @@ class App:
                             style="Card.TLabelframe", padding=12)
         oc.pack(fill="x", pady=(0, 10))
 
-        # mode toggle: Surround file  |  Dolby Atmos
-        mrow = ttk.Frame(oc)
-        mrow.pack(fill="x")
-        ttk.Label(mrow, text="Mode", style="Muted.TLabel").pack(side="left",
-                                                                padx=(0, 10))
-        self.mode = self._reg("mode", tk.StringVar(value="Surround file"))
-        for m in MODES:
-            ttk.Radiobutton(mrow, text=m, value=m, variable=self.mode,
-                            style="Seg.Toolbutton", command=self._on_mode).pack(
-                side="left", padx=(0, 6))
-        self.mode_desc = tk.StringVar(value=MODE_DESC["Surround file"])
-        ttk.Label(oc, textvariable=self.mode_desc, style="Hint.TLabel",
-                  wraplength=700, justify="left").pack(fill="x", pady=(6, 10))
-
-        # format / preset / device
+        # one compact row: Output | Preset | Device
         grid = ttk.Frame(oc)
         grid.pack(fill="x")
         for c in range(3):
             grid.columnconfigure(c, weight=1, uniform="o")
-        self.format = self._reg("format", self._combo(
-            grid, "Format", FORMATS, "7.1.2", 0, 0, TIPS["Format"]))
+        self.output, self._output_cb = self._combo(
+            grid, "Output", OUTPUTS, "7.1.2", 0, 0, TIPS["Output"], cb=True)
+        self._reg("output", self.output)
+        self._output_cb.bind("<<ComboboxSelected>>", lambda e: self._on_output())
         self.preset, self._preset_cb = self._combo(
             grid, "Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"], cb=True)
         self._reg("preset", self.preset)
@@ -381,9 +379,25 @@ class App:
         self.device = self._reg("device", self._combo(
             grid, "Device", DEVICES, "auto", 0, 2, TIPS["Device"]))
 
+        self.output_desc = tk.StringVar(value=OUTPUT_DESC["7.1.2"])
+        ttk.Label(oc, textvariable=self.output_desc, style="Hint.TLabel",
+                  wraplength=700, justify="left").pack(fill="x", pady=(6, 4))
+
+        # preset: one line + little character bars so you SEE what it does
         self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
         ttk.Label(oc, textvariable=self.preset_desc, style="Hint.TLabel",
-                  wraplength=700, justify="left").pack(fill="x", pady=(8, 10))
+                  wraplength=700, justify="left").pack(fill="x", pady=(6, 6))
+        self._meters = []
+        mf = ttk.Frame(oc)
+        mf.pack(fill="x", pady=(0, 8))
+        for _ in range(3):
+            row = ttk.Frame(mf)
+            row.pack(fill="x", pady=1)
+            lab = ttk.Label(row, text="", style="Muted.TLabel", width=15, anchor="w")
+            lab.pack(side="left")
+            cv = tk.Canvas(row, height=10, width=170, bg=PANEL, highlightthickness=0)
+            cv.pack(side="left")
+            self._meters.append((lab, cv))
 
         # output folder + open icon
         ttk.Label(oc, text="Output folder  (blank = a Final_… folder next to each song)",
@@ -510,11 +524,24 @@ class App:
         return var
 
     # ---- reactive descriptions
-    def _on_mode(self):
-        self.mode_desc.set(MODE_DESC.get(self.mode.get(), ""))
+    def _on_output(self):
+        self.output_desc.set(OUTPUT_DESC.get(self.output.get(), ""))
 
     def _on_preset(self):
         self.preset_desc.set(PRESET_DESC.get(self.preset.get(), ""))
+        self._update_meters()
+
+    def _update_meters(self):
+        prof = PRESET_METERS.get(self.preset.get(), [])
+        for (lab, cv), (name, val) in zip(self._meters, prof):
+            lab.configure(text=name)
+            cv.delete("all")
+            w, h, gap = int(cv["width"]), int(cv["height"]), 3
+            seg = (w - 4 * gap) / 5.0
+            for i in range(5):
+                x0 = i * (seg + gap)
+                cv.create_rectangle(x0, 0, x0 + seg, h,
+                                    fill=ACCENT if i < val else CARD, outline="")
 
     # ------------------------------------------------------------ folders
     def _open_folder(self, path):
@@ -601,7 +628,10 @@ class App:
     def _cmd_for(self, job):
         py = sys.executable
         path, kind = job["path"], job["kind"]
-        common = ["--format", self.format.get(), "--preset", self.preset.get(),
+        out = self.output.get()
+        atmos = (out == "Dolby Atmos")
+        fmt = "7.1.2" if atmos else out
+        common = ["--format", fmt, "--preset", self.preset.get(),
                   "--vocal-mode", self.vocal.get(),
                   "--backing-gain", self.backing.get().strip() or "auto"]
         if kind == "song":
@@ -623,7 +653,7 @@ class App:
             v = var.get()
             if v and v != "auto":
                 cmd += ["--place-%s" % stem, v]
-        if self.mode.get() == "Dolby Atmos":
+        if atmos:
             cmd += ["--adm"]
         return cmd
 
