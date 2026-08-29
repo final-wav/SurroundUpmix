@@ -10,11 +10,16 @@ becomes a song job; individual audio files become song jobs.
 Song jobs run allinone.py (Demucs -> split -> surround); stems jobs run
 upmix.py. Everything streams into a live log while the window stays responsive.
 
+The two everyday choices - Surround vs. Atmos, and the preset - are up top and
+explained inline; the fine-tuning knobs live under a collapsible "Advanced"
+section. Your settings are remembered between runs.
+
 Tkinter ships with Python. OS drag & drop additionally needs `tkinterdnd2`
 (`pip install tkinterdnd2`); without it the queue still works via the buttons.
 
     python gui.py
 """
+import json
 import os
 import queue
 import subprocess
@@ -34,6 +39,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from surroundupmix.inputs import AUDIO_EXT, expand_inputs  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+CFG_PATH = os.path.join(os.path.expanduser("~"), ".surroundupmix_gui.json")
 
 # ---- dark palette -----------------------------------------------------------
 BG = "#1e1f22"
@@ -46,7 +52,6 @@ ACCENT_HI = "#4752c4"
 BORDER = "#3f4147"
 OK = "#3ba55d"
 STOP = "#ed4245"
-WARN = "#e5a44b"
 LOG_BG = "#131416"
 SEL = "#3a3d44"
 
@@ -55,13 +60,22 @@ PRESETS = ["focus", "immersive", "concert", "envelop"]
 DEVICES = ["auto", "cuda", "cpu"]
 SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
-MODELS = ["htdemucs_ft", "htdemucs_6s"]  # 6s adds guitar + piano stems (slower, no _ft, weak piano)
-EXPORT = ["surround file", "Dolby Atmos (ADM BWF)"]
-AIR = ["on", "off"]
+MODELS = ["htdemucs_ft", "htdemucs_6s"]
+MODES = ["Surround file", "Dolby Atmos"]
+PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
+
+MODE_DESC = {
+    "Surround file": "Plain multichannel FLAC / WAV. Plays anywhere. 5.1 / 7.1 are FLAC, "
+                     "7.1.2 is WAV - its two height channels only reach real speakers on a "
+                     "full Atmos-aware setup.",
+    "Dolby Atmos":   "A self-contained 7.1.2-bed ADM BWF master at 48 kHz (valid Dolby "
+                     "metadata). Import it into Studio One / the Dolby Atmos Renderer to make "
+                     "the height real and encode E-AC-3 / JOC. Forces 7.1.2.",
+}
 
 PRESET_DESC = {
     "focus":     "Vocal-forward, subtle wrap. Lead sits firmly in the centre, rears quietest. "
-                 "Best for vocal/dialogue-led tracks (rap, singer-songwriter, podcasts).",
+                 "Best for vocal / dialogue-led tracks (rap, singer-songwriter, podcasts).",
     "immersive": "Balanced all-rounder - the reference the project was hand-tuned to by ear. "
                  "Fits most songs.  (Default)",
     "concert":   "Roomier: more to the sides / backs / heights, vocal a touch looser. "
@@ -72,13 +86,12 @@ PRESET_DESC = {
 
 TIPS = {
     "Format": "Speaker layout. 5.1 / 7.1 are written as FLAC; 7.1.2 adds two height speakers "
-              "and is written as WAV.",
+              "and is written as WAV. (Dolby Atmos always uses 7.1.2.)",
     "Preset": "Overall character - how much wraps around you and how firmly the vocal is "
-              "centred. The line below the options describes the selected one.",
+              "centred. The line below describes the selected one.",
     "Device": "auto uses your NVIDIA GPU if present (much faster), otherwise the CPU.",
     "Split vocals": "Split the vocal into LEAD + BACKING (Roformer karaoke): the lead stays "
-                    "front, the backing becomes its own object behind you. auto = split when "
-                    "the splitter is installed.",
+                    "front, the backing wraps behind. auto = split when the splitter is installed.",
     "Vocal mode": "auto detects a short-delay-DOUBLED vocal and keeps it forward (spreading it "
                   "would comb-filter into 'many voices'). forward / spread override.",
     "Rear gain (dB)": "Taste offset on the WHOLE rear field, on top of the auto-balance. "
@@ -90,14 +103,6 @@ TIPS = {
     "Demucs model": "htdemucs_ft = 4 stems (bass/drums/vocals/other), best quality (default). "
                     "htdemucs_6s also separates guitar + piano for individual placement "
                     "(slower, no _ft, weaker piano).",
-    "Export": "surround file = FLAC / WAV (5.1 / 7.1 / 7.1.2).  Dolby Atmos (ADM BWF) = a "
-              "7.1.2-bed master at 48 kHz that opens straight in the Dolby Atmos Renderer "
-              "(no channel mapping) - play it on your 7.1.2 rig or export a binaural render. "
-              "Forces the 7.1.2 bed; the final E-AC-3/JOC encode is done in the Renderer.",
-    "HF air": "Demucs loses the top octave, so the split+recombine sounds dull (~9-21 kHz). "
-              "on = reinject the ORIGINAL master's highs above the crossover so brilliance "
-              "survives. Only works on song jobs (needs the original); no effect on a "
-              "pre-separated stems folder.",
 }
 
 PLACE_TIP = ("Where each instrument goes.\n"
@@ -144,12 +149,47 @@ class App:
         self.stop_flag = False
         self.q = queue.Queue()
         self.jobs = {}          # iid -> {"path","kind"}
+        self._cfg_vars = {}     # name -> tk.StringVar (for remembering settings)
+        self.cfg = self._load_cfg()
         root.title("SurroundUpmix")
         root.configure(bg=BG)
-        root.minsize(760, 720)
+        root.minsize(780, 700)
         self._style()
         self._build()
+        self._apply_cfg()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(80, self._drain)
+
+    # ------------------------------------------------------------ settings
+    def _load_cfg(self):
+        try:
+            with open(CFG_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+
+    def _save_cfg(self):
+        try:
+            cfg = {name: var.get() for name, var in self._cfg_vars.items()}
+            with open(CFG_PATH, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, indent=2)
+        except Exception:
+            pass
+
+    def _apply_cfg(self):
+        for name, var in self._cfg_vars.items():
+            if name in self.cfg:
+                var.set(self.cfg[name])
+        self._on_mode()
+        self._on_preset()
+
+    def _reg(self, name, var):
+        self._cfg_vars[name] = var
+        return var
+
+    def _on_close(self):
+        self._save_cfg()
+        self.root.destroy()
 
     # ------------------------------------------------------------ styling
     def _style(self):
@@ -162,6 +202,8 @@ class App:
         s.configure("Bg.TFrame", background=BG)
         s.configure("TLabel", background=PANEL, foreground=FG)
         s.configure("Muted.TLabel", background=PANEL, foreground=MUTED)
+        s.configure("Hint.TLabel", background=PANEL, foreground=MUTED,
+                    font=("Segoe UI", 9))
         s.configure("BgMuted.TLabel", background=BG, foreground=MUTED)
         s.configure("Header.TLabel", background=BG, foreground=FG,
                     font=("Segoe UI", 17, "bold"))
@@ -182,6 +224,13 @@ class App:
         self.root.option_add("*TCombobox*Listbox.foreground", FG)
         self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
         self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
+        # segmented (Surround / Atmos) toggle
+        s.configure("Seg.Toolbutton", background=CARD, foreground=MUTED,
+                    bordercolor=BORDER, focusthickness=0, padding=(18, 9),
+                    font=("Segoe UI", 10, "bold"), anchor="center")
+        s.map("Seg.Toolbutton",
+              background=[("selected", ACCENT), ("active", BORDER)],
+              foreground=[("selected", "#ffffff")])
         # treeview (queue)
         s.configure("Queue.Treeview", background=LOG_BG, fieldbackground=LOG_BG,
                     foreground=FG, bordercolor=BORDER, borderwidth=0, rowheight=26)
@@ -203,41 +252,59 @@ class App:
         s.configure("Ghost.TButton", background=CARD, foreground=FG,
                     bordercolor=BORDER, padding=(10, 6))
         s.map("Ghost.TButton", background=[("active", BORDER)])
+        s.configure("Icon.TButton", background=CARD, foreground=FG,
+                    bordercolor=BORDER, padding=(8, 6), font=("Segoe UI", 11))
+        s.map("Icon.TButton", background=[("active", BORDER)])
+        s.configure("Link.TButton", background=PANEL, foreground=FG,
+                    bordercolor=PANEL, focusthickness=0, padding=(2, 4),
+                    font=("Segoe UI", 10, "bold"), anchor="w")
+        s.map("Link.TButton", background=[("active", PANEL)],
+              foreground=[("active", ACCENT)])
 
     # ------------------------------------------------------------ layout
     def _build(self):
         head = ttk.Frame(self.root, style="Bg.TFrame")
         head.pack(fill="x", padx=18, pady=(16, 6))
         ttk.Label(head, text="SurroundUpmix", style="Header.TLabel").pack(anchor="w")
-        ttk.Label(head, text="stereo → 5.1 / 7.1 / 7.1.2  ·  batch queue  ·  "
+        ttk.Label(head, text="stereo → 5.1 / 7.1 / 7.1.2 or Dolby Atmos  ·  "
                   "direct stays front, ambient wraps",
                   style="Sub.TLabel").pack(anchor="w")
 
         body = ttk.Frame(self.root, style="Bg.TFrame")
         body.pack(fill="both", expand=True, padx=18, pady=8)
 
-        # -- queue card
-        qc = ttk.Labelframe(body, text="  QUEUE  ", style="Card.TLabelframe",
+        self._build_input(body)
+        self._build_output(body)
+        self._build_advanced(body)
+        self._build_actions(body)
+        self._build_log(body)
+
+    # ---- input / queue
+    def _build_input(self, body):
+        ic = ttk.Labelframe(body, text="  INPUT  ", style="Card.TLabelframe",
                             padding=12)
-        qc.pack(fill="both", expand=True, pady=(0, 10))
-        bar = ttk.Frame(qc)
+        ic.pack(fill="both", expand=True, pady=(0, 10))
+        bar = ttk.Frame(ic)
         bar.pack(fill="x", pady=(0, 8))
         ttk.Button(bar, text="＋ Add files…", style="Ghost.TButton",
                    command=self._add_files).pack(side="left")
         ttk.Button(bar, text="＋ Add folder…", style="Ghost.TButton",
                    command=self._add_folder).pack(side="left", padx=(8, 0))
+        b = ttk.Button(bar, text="📁", style="Icon.TButton", command=self._open_input)
+        b.pack(side="left", padx=(8, 0))
+        ToolTip(b, "Open the folder of the selected (or first) input in Explorer")
         ttk.Button(bar, text="Remove", style="Ghost.TButton",
-                   command=self._remove_sel).pack(side="left", padx=(8, 0))
+                   command=self._remove_sel).pack(side="left", padx=(16, 0))
         ttk.Button(bar, text="Clear", style="Ghost.TButton",
                    command=self._clear_queue).pack(side="left", padx=(8, 0))
         hint = ("drag songs or folders here" if HAVE_DND
                 else "tip: pip install tkinterdnd2  for drag & drop")
         ttk.Label(bar, text=hint, style="Muted.TLabel").pack(side="right")
 
-        tw = ttk.Frame(qc)
+        tw = ttk.Frame(ic)
         tw.pack(fill="both", expand=True)
         self.tree = ttk.Treeview(tw, style="Queue.Treeview", show="headings",
-                                 columns=("name", "kind", "status"), height=7,
+                                 columns=("name", "kind", "status"), height=6,
                                  selectmode="extended")
         self.tree.heading("name", text="File", anchor="w")
         self.tree.heading("kind", text="Type", anchor="w")
@@ -259,72 +326,134 @@ class App:
                 w.drop_target_register(DND_FILES)
                 w.dnd_bind("<<Drop>>", self._on_drop)
 
-        # -- options card
-        opt = ttk.Labelframe(body, text="  OPTIONS  (applied to every job)  ",
-                             style="Card.TLabelframe", padding=12)
-        opt.pack(fill="x", pady=(0, 10))
-        for c in range(4):
-            opt.columnconfigure(c, weight=1, uniform="opt")
-        self.format, _ = self._combo(opt, "Format", FORMATS, "7.1.2", 0, 0, TIPS["Format"])
-        self.preset, preset_cb = self._combo(opt, "Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"])
-        self.device, _ = self._combo(opt, "Device", DEVICES, "auto", 0, 2, TIPS["Device"])
-        self.split, _ = self._combo(opt, "Split vocals", SPLIT, "auto", 0, 3, TIPS["Split vocals"])
-        self.vocal, _ = self._combo(opt, "Vocal mode", VOCAL, "auto", 1, 0, TIPS["Vocal mode"])
-        self.rear_gain = self._entry(opt, "Rear gain (dB)", "0", 1, 1, TIPS["Rear gain (dB)"])
-        self.rear_below = self._entry(opt, "Rear below front", "", 1, 2, TIPS["Rear below front"])
-        self.backing = self._entry(opt, "Backing gain", "auto", 1, 3, TIPS["Backing gain"])
-        self.model, _ = self._combo(opt, "Demucs model", MODELS, "htdemucs_ft", 2, 0, TIPS["Demucs model"])
-        self.export, _ = self._combo(opt, "Export", EXPORT, "surround file", 2, 1, TIPS["Export"])
-        self.air, _ = self._combo(opt, "HF air", AIR, "on", 2, 2, TIPS["HF air"])
-        orow = ttk.Frame(opt)
-        orow.grid(row=3, column=0, columnspan=4, sticky="ew", pady=(12, 0))
-        ttk.Label(orow, text="Output folder  (blank = next to each song)",
-                  style="Muted.TLabel").pack(anchor="w")
-        prow = ttk.Frame(opt)
-        prow.grid(row=4, column=0, columnspan=4, sticky="ew", pady=(2, 0))
-        self.outdir = tk.StringVar()
-        ttk.Entry(prow, textvariable=self.outdir).pack(side="left", fill="x",
-                                                       expand=True)
-        ttk.Button(prow, text="Browse…", style="Ghost.TButton",
-                   command=self._browse_out).pack(side="left", padx=(8, 0))
-
-        # live preset description (updates when the Preset box changes)
-        self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
-        ttk.Label(body, textvariable=self.preset_desc, style="Muted.TLabel",
-                  wraplength=920, justify="left").pack(fill="x", padx=6, pady=(0, 8))
-        preset_cb.bind("<<ComboboxSelected>>",
-                       lambda e: self.preset_desc.set(PRESET_DESC.get(self.preset.get(), "")))
-
-        # -- placement per stem (manual overrides; auto = song-adaptive)
-        pl = ttk.Labelframe(body, text="  PLACEMENT PER STEM  (auto = song-adaptive)  ",
+    # ---- output / the everyday choices
+    def _build_output(self, body):
+        oc = ttk.Labelframe(body, text="  OUTPUT  (applied to every job)  ",
                             style="Card.TLabelframe", padding=12)
-        pl.pack(fill="x", pady=(0, 10))
-        PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
+        oc.pack(fill="x", pady=(0, 10))
+
+        # mode toggle: Surround file  |  Dolby Atmos
+        mrow = ttk.Frame(oc)
+        mrow.pack(fill="x")
+        ttk.Label(mrow, text="Mode", style="Muted.TLabel").pack(side="left",
+                                                                padx=(0, 10))
+        self.mode = self._reg("mode", tk.StringVar(value="Surround file"))
+        for m in MODES:
+            ttk.Radiobutton(mrow, text=m, value=m, variable=self.mode,
+                            style="Seg.Toolbutton", command=self._on_mode).pack(
+                side="left", padx=(0, 6))
+        self.mode_desc = tk.StringVar(value=MODE_DESC["Surround file"])
+        ttk.Label(oc, textvariable=self.mode_desc, style="Hint.TLabel",
+                  wraplength=900, justify="left").pack(fill="x", pady=(6, 10))
+
+        # format / preset / device
+        grid = ttk.Frame(oc)
+        grid.pack(fill="x")
+        for c in range(3):
+            grid.columnconfigure(c, weight=1, uniform="o")
+        self.format = self._reg("format", self._combo(
+            grid, "Format", FORMATS, "7.1.2", 0, 0, TIPS["Format"]))
+        self.preset, self._preset_cb = self._combo(
+            grid, "Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"], cb=True)
+        self._reg("preset", self.preset)
+        self._preset_cb.bind("<<ComboboxSelected>>", lambda e: self._on_preset())
+        self.device = self._reg("device", self._combo(
+            grid, "Device", DEVICES, "auto", 0, 2, TIPS["Device"]))
+
+        self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
+        ttk.Label(oc, textvariable=self.preset_desc, style="Hint.TLabel",
+                  wraplength=900, justify="left").pack(fill="x", pady=(8, 10))
+
+        # output folder + open icon
+        ttk.Label(oc, text="Output folder  (blank = a Final_… folder next to each song)",
+                  style="Muted.TLabel").pack(anchor="w")
+        frow = ttk.Frame(oc)
+        frow.pack(fill="x", pady=(2, 0))
+        self.outdir = self._reg("outdir", tk.StringVar())
+        ttk.Entry(frow, textvariable=self.outdir).pack(side="left", fill="x",
+                                                       expand=True)
+        ttk.Button(frow, text="Browse…", style="Ghost.TButton",
+                   command=self._browse_out).pack(side="left", padx=(8, 0))
+        b = ttk.Button(frow, text="📁", style="Icon.TButton",
+                       command=self._open_output)
+        b.pack(side="left", padx=(6, 0))
+        ToolTip(b, "Open the output folder in Explorer")
+
+    # ---- advanced (collapsible)
+    def _build_advanced(self, body):
+        self._adv_open = False
+        self.adv_btn = ttk.Button(body, text="▸  Advanced  (model, split, tuning, placement)",
+                                  style="Link.TButton", command=self._toggle_adv)
+        self.adv_btn.pack(fill="x", pady=(0, 4))
+
+        self.adv = ttk.Frame(body, style="TFrame")
+        # processing row
+        pc = ttk.Labelframe(self.adv, text="  Processing  ", style="Card.TLabelframe",
+                            padding=12)
+        pc.pack(fill="x", pady=(0, 8))
+        for c in range(3):
+            pc.columnconfigure(c, weight=1, uniform="p")
+        self.model = self._reg("model", self._combo(
+            pc, "Demucs model", MODELS, "htdemucs_ft", 0, 0, TIPS["Demucs model"]))
+        self.split = self._reg("split", self._combo(
+            pc, "Split vocals", SPLIT, "auto", 0, 1, TIPS["Split vocals"]))
+        self.vocal = self._reg("vocal", self._combo(
+            pc, "Vocal mode", VOCAL, "auto", 0, 2, TIPS["Vocal mode"]))
+
+        # tuning row
+        tc = ttk.Labelframe(self.adv, text="  Balance (blank = preset default)  ",
+                            style="Card.TLabelframe", padding=12)
+        tc.pack(fill="x", pady=(0, 8))
+        for c in range(3):
+            tc.columnconfigure(c, weight=1, uniform="t")
+        self.rear_gain = self._reg("rear_gain", self._entry(
+            tc, "Rear gain (dB)", "0", 0, 0, TIPS["Rear gain (dB)"]))
+        self.rear_below = self._reg("rear_below", self._entry(
+            tc, "Rear below front", "", 0, 1, TIPS["Rear below front"]))
+        self.backing = self._reg("backing", self._entry(
+            tc, "Backing gain", "auto", 0, 2, TIPS["Backing gain"]))
+
+        # placement row
+        plc = ttk.Labelframe(self.adv, text="  Placement per stem  (auto = song-adaptive)  ",
+                             style="Card.TLabelframe", padding=12)
+        plc.pack(fill="x", pady=(0, 8))
         for c in range(len(PLACE_STEMS)):
-            pl.columnconfigure(c, weight=1, uniform="pl")
+            plc.columnconfigure(c, weight=1, uniform="pl")
         self.place = {}
         for i, stem in enumerate(PLACE_STEMS):
-            var, _ = self._combo(pl, stem, ["auto", "front", "side", "rear"], "auto", 0, i, PLACE_TIP)
-            self.place[stem] = var
+            var = self._combo(plc, stem, ["auto", "front", "side", "rear"],
+                              "auto", 0, i, PLACE_TIP)
+            self.place[stem] = self._reg("place_" + stem, var)
 
-        # -- actions
-        act = ttk.Frame(body, style="Bg.TFrame")
-        act.pack(fill="x", pady=(0, 8))
-        self.start_btn = ttk.Button(act, text="▶  Start queue",
+    def _toggle_adv(self):
+        self._adv_open = not self._adv_open
+        if self._adv_open:
+            self.adv.pack(fill="x", before=self.act, pady=(0, 4))
+            self.adv_btn.configure(text="▾  Advanced  (model, split, tuning, placement)")
+        else:
+            self.adv.pack_forget()
+            self.adv_btn.configure(text="▸  Advanced  (model, split, tuning, placement)")
+
+    # ---- actions
+    def _build_actions(self, body):
+        self.act = ttk.Frame(body, style="Bg.TFrame")
+        self.act.pack(fill="x", pady=(6, 8))
+        self.start_btn = ttk.Button(self.act, text="▶  Start queue",
                                     style="Accent.TButton", command=self._start)
         self.start_btn.pack(side="left")
-        self.stop_btn = ttk.Button(act, text="■  Stop", style="Stop.TButton",
+        self.stop_btn = ttk.Button(self.act, text="■  Stop", style="Stop.TButton",
                                    command=self._stop, state="disabled")
         self.stop_btn.pack(side="left", padx=(8, 0))
         self.status = tk.StringVar(value="Ready")
-        ttk.Label(act, textvariable=self.status, style="BgMuted.TLabel").pack(
+        ttk.Label(self.act, textvariable=self.status, style="BgMuted.TLabel").pack(
             side="right")
 
-        # -- log
+    # ---- log
+    def _build_log(self, body):
         lw = ttk.Frame(body, style="Bg.TFrame")
         lw.pack(fill="both", expand=True)
         self.log = tk.Text(lw, bg=LOG_BG, fg="#c8ccd2", insertbackground=FG,
-                           relief="flat", height=9, wrap="word", padx=10, pady=8,
+                           relief="flat", height=7, wrap="word", padx=10, pady=8,
                            font=("Cascadia Mono", 10), highlightthickness=1,
                            highlightbackground=BORDER, highlightcolor=BORDER)
         self.log.pack(side="left", fill="both", expand=True)
@@ -332,18 +461,19 @@ class App:
         lsb.pack(side="right", fill="y")
         self.log.configure(yscrollcommand=lsb.set, state="disabled")
 
-    def _combo(self, parent, label, values, default, r, c, tip=None):
+    # ---- widget helpers
+    def _combo(self, parent, label, values, default, r, c, tip=None, cb=False):
         f = ttk.Frame(parent)
         f.grid(row=r, column=c, sticky="ew", padx=4, pady=4)
         lab = ttk.Label(f, text=label, style="Muted.TLabel")
         lab.pack(anchor="w")
         var = tk.StringVar(value=default)
-        cb = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
-        cb.pack(fill="x")
+        box = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
+        box.pack(fill="x")
         if tip:
             ToolTip(lab, tip)
-            ToolTip(cb, tip)
-        return var, cb
+            ToolTip(box, tip)
+        return (var, box) if cb else var
 
     def _entry(self, parent, label, default, r, c, tip=None):
         f = ttk.Frame(parent)
@@ -357,6 +487,37 @@ class App:
             ToolTip(lab, tip)
             ToolTip(e, tip)
         return var
+
+    # ---- reactive descriptions
+    def _on_mode(self):
+        self.mode_desc.set(MODE_DESC.get(self.mode.get(), ""))
+
+    def _on_preset(self):
+        self.preset_desc.set(PRESET_DESC.get(self.preset.get(), ""))
+
+    # ------------------------------------------------------------ folders
+    def _open_folder(self, path):
+        if path and os.path.isdir(path):
+            try:
+                os.startfile(path)          # Windows
+            except Exception:
+                self._append("! could not open %s\n" % path)
+
+    def _open_input(self):
+        sel = self.tree.selection() or self.tree.get_children()
+        if not sel:
+            self._append("! no input to open (add a file/folder first)\n")
+            return
+        p = self.jobs.get(sel[0], {}).get("path", "")
+        self._open_folder(p if os.path.isdir(p) else os.path.dirname(p))
+
+    def _open_output(self):
+        od = self.outdir.get().strip()
+        if od:
+            self._open_folder(od)
+        else:
+            self._append("! output folder is blank (files go into a Final_… "
+                         "folder next to each song)\n")
 
     # ------------------------------------------------------------ queue ops
     def _add_paths(self, paths):
@@ -441,15 +602,14 @@ class App:
             v = var.get()
             if v and v != "auto":
                 cmd += ["--place-%s" % stem, v]
-        if self.export.get().startswith("Dolby Atmos"):
+        if self.mode.get() == "Dolby Atmos":
             cmd += ["--adm"]
-        if self.air.get() == "off":
-            cmd += ["--no-air"]
         return cmd
 
     def _start(self):
         if self.running:
             return
+        self._save_cfg()
         pending = [iid for iid in self.tree.get_children()
                    if self.tree.set(iid, "status").endswith("queued")
                    or self.tree.set(iid, "status").endswith("failed")]

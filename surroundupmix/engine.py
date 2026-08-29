@@ -152,13 +152,13 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                         for k, v in channels.items()}
             _log(verbose, "  resampled %d -> 48000 Hz (Atmos)" % sr)
             sr_out = 48000
-        base = os.path.join(out_dir, "%s_atmos" % track_label)
+        base = os.path.join(out_dir, "%s [Atmos %s]" % (track_label, preset))
         out = write_adm_bwf(base, channels, sr_out, objects=None,
                             bits=adm_bits, program_name=track_label)
         _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed, %d-bit)" % (out, adm_bits))
         return out
 
-    base = os.path.join(out_dir, "%s_%s" % (track_label, fmt))
+    base = os.path.join(out_dir, "%s [%s %s]" % (track_label, fmt, preset))
     out = write_surround(base, channels, fmt, sr, bits=24, force_wav=force_wav)
     _log(verbose, "  wrote %s (%d ch)" % (out, len(LAYOUTS[fmt])))
     return out
