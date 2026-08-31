@@ -26,6 +26,7 @@ from surroundupmix.engine import upmix_folder
 from surroundupmix.inputs import expand_inputs, looks_like_stems
 from surroundupmix.routing import spatialize, _auto_place
 from surroundupmix.balance import auto_balance, normalize
+from surroundupmix.voice import assess_vocal_roles
 
 SR = 44100
 
@@ -307,6 +308,180 @@ def test_forced_rear_survives_autobalance():
     aw_base = sum(_rms(base.data[c]) for c in ("BL", "BR", "SL", "SR"))
     aw_forced = sum(_rms(forced.data[c]) for c in ("BL", "BR", "SL", "SR"))
     assert abs(20 * np.log10((aw_forced + 1e-12) / (aw_base + 1e-12))) < 2.0
+
+
+def test_decorrelation_reduces_side_back_correlation():
+    # a diffuse texture stem (independent L/R) wraps to sides AND backs. Without
+    # decorrelation SL and BL carry the identical signal; with it they don't.
+    rng = np.random.default_rng(7)
+    n = SR * 2
+    other = Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR)
+    stems = {"other": other}
+
+    def corr(a, b):
+        a = a - a.mean(); b = b - b.mean()
+        return abs(float(np.mean(a * b)) /
+                   (np.sqrt(np.mean(a * a) * np.mean(b * b)) + 1e-12))
+
+    p_on = _presets.get("immersive"); p_on["decorr"] = True
+    p_off = _presets.get("immersive"); p_off["decorr"] = False
+    ch_on = spatialize(stems, "7.1", p_on, SR)
+    ch_off = spatialize(stems, "7.1", p_off, SR)
+
+    # off: sides and backs are the same signal -> ~fully correlated
+    assert corr(ch_off.total("SL"), ch_off.total("BL")) > 0.95
+    # on: decorrelated -> correlation drops a lot
+    assert corr(ch_on.total("SL"), ch_on.total("BL")) < 0.5
+    # flat-magnitude all-pass preserves energy: the back level is unchanged
+    r_off = _rms(ch_off.total("BL")); r_on = _rms(ch_on.total("BL"))
+    assert abs(20 * np.log10((r_on + 1e-12) / (r_off + 1e-12))) < 1.0
+
+
+def _sparse(n, nf, active_frames, amp, seed):
+    """A mono signal that is only active in `active_frames` of `nf` blocks."""
+    rng = np.random.default_rng(seed)
+    x = np.zeros(n, dtype="float32")
+    hop = n // nf
+    for f in active_frames:
+        x[f * hop:(f + 1) * hop] = rng.standard_normal(hop).astype("float32") * amp
+    return x
+
+
+def _st(m):
+    return Stereo(np.stack([m, m], 1).astype("float32"), SR)
+
+
+def test_vocal_roles_keep_normal_split():
+    # normal: continuous loud lead, sparse quiet backing -> keep the model split
+    n = SR * 2
+    t = np.arange(n) / SR
+    lead = (0.25 * np.sin(2 * np.pi * 220 * t)).astype("float32")
+    backing = _sparse(n, 40, [10, 11, 28, 29], 0.05, 1)
+    full = _st(lead + backing)
+    a = assess_vocal_roles(_st(lead), _st(backing), full, SR, mode="auto")
+    assert a["action"] == "keep", a
+
+
+def test_vocal_roles_swap_when_inverted():
+    # inverted: the "lead" is a thin sparse element, the "backing" is the real,
+    # continuous main vocal -> the guard must swap them back
+    n = SR * 2
+    t = np.arange(n) / SR
+    backing = (0.25 * np.sin(2 * np.pi * 220 * t)).astype("float32")  # real lead
+    lead = _sparse(n, 40, [12, 13, 30, 31], 0.03, 2)                  # thin element
+    full = _st(lead + backing)
+    a = assess_vocal_roles(_st(lead), _st(backing), full, SR, mode="auto")
+    assert a["action"] == "swap", a
+
+
+def test_vocal_roles_nosplit_for_wet_wash():
+    # a wide/wet vocal wash: neither part is a clean dry lead and the full vocal
+    # is highly decorrelated (coh ~ 0) -> skip the split, keep it up front
+    n = SR * 2
+    rng = np.random.default_rng(5)
+    full = Stereo((rng.standard_normal((n, 2)) * 0.15).astype("float32"), SR)  # wide
+    lead = _sparse(n, 40, [8, 9], 0.04, 6)
+    backing = _sparse(n, 40, [24, 25], 0.04, 7)
+    a = assess_vocal_roles(_st(lead), _st(backing), full, SR, mode="auto")
+    assert a["action"] == "nosplit", a
+
+
+def test_vocal_roles_force_modes():
+    n = SR
+    lead, backing = _st(np.ones(n, "float32") * 0.1), _st(np.ones(n, "float32") * 0.1)
+    assert assess_vocal_roles(lead, backing, lead, SR, mode="keep")["action"] == "keep"
+    assert assess_vocal_roles(lead, backing, lead, SR, mode="swap")["action"] == "swap"
+
+
+def test_adm_bed_orders_playback_vs_renderer():
+    # write both ADM variants with a distinct marker per channel, read the PCM
+    # back and check the interleave order matches each bed.
+    import tempfile
+    from surroundupmix.adm import write_adm_bwf, BED, BED_RENDERER
+
+    names = ["FL", "FR", "FC", "LFE", "BL", "BR", "SL", "SR", "TFL", "TFR"]
+    n = 2000
+    channels = {nm: np.full(n, (i + 1) / 20.0, dtype="float32")
+                for i, nm in enumerate(names)}   # FL=0.05 .. TFR=0.50
+    d = tempfile.mkdtemp()
+
+    def order_of(path):
+        data, _ = sf.read(path, always_2d=True)
+        return [int(round(data[100, k] * 20)) for k in range(10)]   # -> channel index+1
+
+    p_play = write_adm_bwf(os.path.join(d, "play"), channels, 48000, bed=BED)
+    p_rend = write_adm_bwf(os.path.join(d, "rend"), channels, 48000, bed=BED_RENDERER)
+
+    exp_play = [names.index(b[0]) + 1 for b in BED]           # FL FR FC LFE BL BR SL SR ..
+    exp_rend = [names.index(b[0]) + 1 for b in BED_RENDERER]  # FL FR FC LFE SL SR BL BR ..
+    assert order_of(p_play) == exp_play == [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+    assert order_of(p_rend) == exp_rend == [1, 2, 3, 4, 7, 8, 5, 6, 9, 10]
+
+    # renderer bed = Dolby sides-before-rears labels at 5..8
+    assert [b[1] for b in BED_RENDERER][4:8] == ["RC_Lss", "RC_Rss", "RC_Lrs", "RC_Rrs"]
+    # playback bed unchanged: rears-before-sides
+    assert [b[1] for b in BED][4:8] == ["RC_Lrs", "RC_Rrs", "RC_Lss", "RC_Rss"]
+
+
+def test_compute_residual_recovers_missing_layer():
+    import tempfile
+    from surroundupmix.recover import compute_residual
+    d = tempfile.mkdtemp()
+    n = SR
+    rng = np.random.default_rng(4)
+    bass = (rng.standard_normal((n, 2)) * 0.10).astype("float32")
+    drums = (rng.standard_normal((n, 2)) * 0.10).astype("float32")
+    extra = (rng.standard_normal((n, 2)) * 0.02).astype("float32")   # the lost detail
+    sf.write(os.path.join(d, "bass.flac"), bass, SR, subtype="PCM_24")
+    sf.write(os.path.join(d, "drums.flac"), drums, SR, subtype="PCM_24")
+    orig = os.path.join(d, "orig.flac")
+    sf.write(orig, bass + drums + extra, SR, subtype="PCM_24")
+
+    res, rsr = compute_residual(d, orig)          # orig.flac is excluded from the sum
+    m = min(len(res), len(extra))
+    err = np.sqrt(np.mean((res[:m] - extra[:m]) ** 2))
+    ref = np.sqrt(np.mean(extra[:m] ** 2))
+    assert rsr == SR and err / ref < 0.05, (err, ref)
+
+
+def test_residual_gate_rejects_untrustworthy():
+    # stems that do NOT explain the "original" (uncorrelated) must be refused,
+    # so a lossy/misaligned source never reinjects noise as if it were detail.
+    import tempfile
+    from surroundupmix.recover import compute_residual
+    d = tempfile.mkdtemp()
+    n = SR
+    rng = np.random.default_rng(9)
+    sf.write(os.path.join(d, "bass.flac"),
+             (rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR, subtype="PCM_24")
+    sf.write(os.path.join(d, "drums.flac"),
+             (rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR, subtype="PCM_24")
+    orig = os.path.join(d, "orig.flac")           # unrelated content
+    sf.write(orig, (rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR, subtype="PCM_24")
+    res, rsr = compute_residual(d, orig)
+    assert res is None and rsr is None
+
+
+def test_detail_recovery_reinjects_to_front():
+    # a residual stem with centred detail must reappear in the FRONT (forced),
+    # and lift the front vs the same run without the residual.
+    n = SR
+    t = np.arange(n) / SR
+    rng = np.random.default_rng(11)
+    det = (0.1 * np.sin(2 * np.pi * 3000 * t)).astype("float32")   # centred detail
+    stems = {
+        "vocals": Stereo(np.stack([0.2 * np.sin(2 * np.pi * 220 * t)] * 2, 1).astype("float32"), SR),
+        "other": Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR),
+        "residual": Stereo(np.stack([det, det], 1), SR),
+    }
+    p = _presets.get("immersive"); p["recover_gain"] = 0.0
+    ch = spatialize(stems, "7.1", p, SR)
+    stems2 = {k: v for k, v in stems.items() if k != "residual"}
+    ch2 = spatialize(stems2, "7.1", p, SR)
+
+    # centred detail -> forced FC layer (mid), and the front is louder with it
+    assert _rms(ch.forced["FC"]) > 0
+    assert _rms(ch.total("FC")) > _rms(ch2.total("FC"))
 
 
 def _run_all():

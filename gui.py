@@ -60,8 +60,9 @@ PRESETS = ["focus", "immersive", "concert", "envelop"]
 DEVICES = ["auto", "cuda", "cpu"]
 SPLIT = ["auto", "on", "off"]
 VOCAL = ["auto", "spread", "forward"]
-MODELS = ["htdemucs_ft", "htdemucs_6s"]
-OUTPUTS = ["5.1", "7.1", "7.1.2", "Dolby Atmos"]
+MODELS = ["htdemucs_ft", "htdemucs_6s", "htdemucs"]
+VROLES = ["auto", "keep", "swap"]
+OUTPUTS = ["5.1", "7.1", "7.1.2", "Dolby Atmos", "ADM BWF"]
 PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
 
 OUTPUT_DESC = {
@@ -69,8 +70,12 @@ OUTPUT_DESC = {
     "7.1": "8-channel FLAC - plays on any 7.1 system.",
     "7.1.2": "10-channel WAV with two height channels. The height only reaches "
              "real speakers on an Atmos-aware setup.",
-    "Dolby Atmos": "A self-contained 7.1.2 ADM BWF master (48 kHz). Import into "
-                   "Studio One / the Dolby Atmos Renderer for real height + encode.",
+    "Dolby Atmos": "A self-contained 7.1.2 ADM BWF master (48 kHz), bed order for "
+                   "PLAYBACK on your speaker rig (rears at 5/6). Correct on the "
+                   "system - but the Dolby Atmos Renderer maps this side<->rear wrong.",
+    "ADM BWF": "Same 7.1.2 ADM BWF master, but bed in the Dolby Atmos RENDERER's "
+               "order (sides at 5/6). Use this one when you import into the Renderer "
+               "in Studio One so it maps correctly; use 'Dolby Atmos' for the rig.",
 }
 
 # a rough 0-5 character profile per preset, drawn as little bars so you can SEE
@@ -113,6 +118,22 @@ TIPS = {
     "Demucs model": "htdemucs_ft = 4 stems (bass/drums/vocals/other), best quality (default). "
                     "htdemucs_6s also separates guitar + piano for individual placement "
                     "(slower, no _ft, weaker piano).",
+    "Rear decorrelation": "Feed the back (and height) speakers a phase-safe, flat-magnitude "
+                          "decorrelated copy of the surround ambience so the rear field "
+                          "envelops you instead of collapsing onto the sides. on = new "
+                          "default; off = the previous behaviour (same signal on sides + "
+                          "backs). 7.1 / 7.1.2 only. Use off/on to A/B it on your rig.",
+    "Detail recovery": "Demucs never fully rebuilds the mix - a quiet broadband layer "
+                       "(air, transients, breaths, room) is lost. This reinjects exactly "
+                       "that (residual = original minus the stems) from the master, placed "
+                       "by the same rule (coherent detail up front, diffuse air wraps). "
+                       "on = new default; off = old behaviour (HF-air restore only). "
+                       "Song mode only.",
+    "Vocal roles": "The karaoke split only LABELS one part 'lead' and the other 'backing'. "
+                   "auto checks from the signal which is really the main vocal and swaps "
+                   "them if the model got it backwards (e.g. a wet/filtered lead wrongly "
+                   "sent behind you), or skips the split entirely for a wide/wet vocal "
+                   "wash. keep = trust the model; swap = force a swap.",
 }
 
 PLACE_TIP = ("Where each instrument goes.\n"
@@ -438,6 +459,13 @@ class App:
             pc, "Split vocals", SPLIT, "auto", 0, 1, TIPS["Split vocals"]))
         self.vocal = self._reg("vocal", self._combo(
             pc, "Vocal mode", VOCAL, "auto", 0, 2, TIPS["Vocal mode"]))
+        self.decorr = self._reg("decorr", self._combo(
+            pc, "Rear decorrelation", ["on", "off"], "on", 1, 0,
+            TIPS["Rear decorrelation"]))
+        self.vroles = self._reg("vroles", self._combo(
+            pc, "Vocal roles", VROLES, "auto", 1, 1, TIPS["Vocal roles"]))
+        self.recover = self._reg("recover", self._combo(
+            pc, "Detail recovery", ["on", "off"], "on", 1, 2, TIPS["Detail recovery"]))
 
         # tuning row
         tc = ttk.Labelframe(self.adv, text="  Balance (blank = preset default)  ",
@@ -509,6 +537,10 @@ class App:
         var = tk.StringVar(value=default)
         box = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
         box.pack(fill="x")
+        # don't let the mouse wheel change the selection while scrolling the page
+        box.bind("<MouseWheel>", lambda e: "break")     # Windows / macOS
+        box.bind("<Button-4>", lambda e: "break")       # Linux wheel up
+        box.bind("<Button-5>", lambda e: "break")       # Linux wheel down
         if tip:
             ToolTip(lab, tip)
             ToolTip(box, tip)
@@ -634,10 +666,17 @@ class App:
         path, kind = job["path"], job["kind"]
         out = self.output.get()
         atmos = (out == "Dolby Atmos")
-        fmt = "7.1.2" if atmos else out
+        admr = (out == "ADM BWF")
+        fmt = "7.1.2" if (atmos or admr) else out
         common = ["--format", fmt, "--preset", self.preset.get(),
                   "--vocal-mode", self.vocal.get(),
                   "--backing-gain", self.backing.get().strip() or "auto"]
+        if self.decorr.get() == "off":
+            common += ["--decorrelate", "off"]
+        if self.vroles.get() != "auto":
+            common += ["--vocal-roles", self.vroles.get()]
+        if self.recover.get() == "off":
+            common += ["--recover-detail", "off"]
         if kind == "song":
             cmd = [py, os.path.join(HERE, "allinone.py"), path,
                    "--device", self.device.get(), "--model", self.model.get(),
@@ -659,6 +698,8 @@ class App:
                 cmd += ["--place-%s" % stem, v]
         if atmos:
             cmd += ["--adm"]
+        elif admr:
+            cmd += ["--adm", "--adm-order", "renderer"]
         return cmd
 
     def _start(self):

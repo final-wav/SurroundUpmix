@@ -37,6 +37,26 @@ BED = [
     ("TFR", "RC_Rtm", "RoomCentricRightTopMiddle",    1.0,  0.0,  1.0),
 ]
 
+# The Dolby Atmos Renderer's OWN canonical 7.1.2 bed order: side surrounds
+# BEFORE rear surrounds -> L R C LFE Lss Rss Lrs Rrs Ltm Rtm. The default BED
+# above is the order the user's PLAYBACK chain wants (rears at 5/6); importing
+# THAT into the Renderer maps side<->rear wrong. This variant writes the bed in
+# the Renderer's order so an import lands correctly. Same signals, same labels -
+# only the channel ORDER (and the axml that describes it) differs. Positions are
+# each speaker's own coordinates, so SL stays a side (Y=0), BL a rear (Y=-1).
+BED_RENDERER = [
+    ("FL",  "RC_L",   "RoomCentricLeft",             -1.0,  1.0, None),
+    ("FR",  "RC_R",   "RoomCentricRight",             1.0,  1.0, None),
+    ("FC",  "RC_C",   "RoomCentricCenter",            0.0,  1.0, None),
+    ("LFE", "RC_LFE", "RoomCentricLFE",              -1.0,  1.0, -1.0),
+    ("SL",  "RC_Lss", "RoomCentricLeftSideSurround", -1.0,  0.0, None),
+    ("SR",  "RC_Rss", "RoomCentricRightSideSurround", 1.0,  0.0, None),
+    ("BL",  "RC_Lrs", "RoomCentricLeftRearSurround", -1.0, -1.0, None),
+    ("BR",  "RC_Rrs", "RoomCentricRightRearSurround", 1.0, -1.0, None),
+    ("TFL", "RC_Ltm", "RoomCentricLeftTopMiddle",    -1.0,  0.0,  1.0),
+    ("TFR", "RC_Rtm", "RoomCentricRightTopMiddle",    1.0,  0.0,  1.0),
+]
+
 
 def _t(sec):
     """Seconds -> ADM time string HH:MM:SS.sssss."""
@@ -113,7 +133,7 @@ def make_dbmd(channel_count, creation0="Created with SurroundUpmix",
     return bytes(out)
 
 
-def _axml(n_frames, sr, bits, objects, program_name):
+def _axml(n_frames, sr, bits, objects, program_name, bed=BED):
     total = _t(n_frames / float(sr))
     A = []
     A.append('<?xml version="1.0" encoding="utf-8"?>')
@@ -174,7 +194,7 @@ def _axml(n_frames, sr, bits, objects, program_name):
                  '</audioPackFormat>' % (0x1001 + i, i + 1, 0x1001 + i))
 
     # ---- bed audioChannelFormats ----
-    for k, (nm, label, cfname, x, y, z) in enumerate(BED):
+    for k, (nm, label, cfname, x, y, z) in enumerate(bed):
         A.append('<audioChannelFormat audioChannelFormatID="AC_0001%04x" '
                  'audioChannelFormatName="%s" typeDefinition="DirectSpeakers" '
                  'typeLabel="0001">' % (0x1001 + k, cfname))
@@ -292,7 +312,8 @@ def _chunk(cid, body):
 
 
 def write_adm_bwf(path, channels, sr, objects=None, bits=24,
-                  program_name="SurroundUpmix", object_signals=None, dbmd=None):
+                  program_name="SurroundUpmix", object_signals=None, dbmd=None,
+                  bed=None):
     """Write an ADM BWF master.
 
     channels : {name: mono np.array} for the 10 bed channels (our WAVE names
@@ -301,12 +322,17 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
                  {"name": str, "blocks": [(rtime_s, dur_s, x, y, z), ...]}
                with a matching mono signal in object_signals[i].
     object_signals : list of mono np.arrays, one per object (same order).
+    bed      : channel order/label table to write. Defaults to BED (the
+               playback-verified order); pass BED_RENDERER for a file that
+               imports into the Dolby Atmos Renderer with correct side/rear
+               mapping. Both the PCM interleave and the axml follow this.
     Returns the written path (forces .wav).
     """
     if not path.lower().endswith(".wav"):
         path = path + ".wav"
     objects = objects or []
     object_signals = object_signals or []
+    bed = bed or BED
 
     n = 0
     for v in channels.values():
@@ -316,9 +342,9 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
         if s is not None:
             n = max(n, len(s))
 
-    # Interleave: 10 bed channels in DOLBY bed order, then objects.
+    # Interleave: 10 bed channels in the chosen bed order, then objects.
     cols = []
-    for nm, *_ in BED:
+    for nm, *_ in bed:
         v = channels.get(nm)
         if v is None or len(v) == 0:
             v = np.zeros(n, dtype=np.float32)
@@ -343,7 +369,7 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
 
     fmt_body = struct.pack("<HHIIHH", 0x0001, ch, sr, sr * block_align,
                            block_align, bits)
-    axml = _axml(n, sr, bits, objects, program_name)
+    axml = _axml(n, sr, bits, objects, program_name, bed=bed)
     chna = _chna(len(objects))
 
     fmt_chunk = _chunk(b"fmt ", fmt_body)

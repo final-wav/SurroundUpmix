@@ -45,7 +45,9 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
-                 adm=False, adm_bits=24, original=None, verbose=True):
+                 adm=False, adm_bits=24, adm_order="playback", original=None,
+                 decorrelate=True, vocal_roles="auto", recover_detail=True,
+                 recover_gain=0.0, verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
 
     adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
@@ -60,9 +62,36 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
         p["rear_below_front"] = rear_below_front
     if lfe_cross is not None:
         p["lfe_cross"] = lfe_cross
+    p["decorr"] = decorrelate
+    p["recover_gain"] = recover_gain
+    p["recover_cross"] = _AIR_CROSS       # residual fills BELOW the air crossover
+    # detail recovery: use the separation residual if present (and enabled),
+    # otherwise ignore it (the HF-air restore below still runs)
+    if "residual" in stems and not recover_detail:
+        stems.pop("residual", None)
 
-    _log(verbose, "SurroundUpmix v2  |  %s  |  preset: %s" % (fmt, preset))
+    _log(verbose, "SurroundUpmix v2  |  %s  |  preset: %s%s" % (
+        fmt, preset, "" if decorrelate else "  (rear decorrelation OFF)"))
     _log(verbose, "  stems: %s  (%d Hz)" % (", ".join(stems), sr))
+
+    # lead/backing role check: the karaoke split only *labels* lead vs backing;
+    # verify from the signal so a stylistically wet lead (Tame-Impala wash) that
+    # the model mislabelled as "backing" isn't wrapped behind the listener.
+    if "backing" in stems and vocal_roles != "keep":
+        from .voice import assess_vocal_roles
+        full = stems.get("vocals_full", stems.get("vocals"))
+        a = assess_vocal_roles(stems["vocals"], stems["backing"], full, sr,
+                               mode=vocal_roles)
+        if a["action"] == "swap":
+            stems["vocals"], stems["backing"] = stems["backing"], stems["vocals"]
+            _log(verbose, "  vocal roles: SWAPPED - %s" % a["reason"])
+        elif a["action"] == "nosplit":
+            stems["vocals"] = stems.get("vocals_full", stems["vocals"])
+            stems.pop("backing", None)
+            stems.pop("vocals_full", None)
+            _log(verbose, "  vocal roles: no split - %s" % a["reason"])
+        else:
+            _log(verbose, "  vocal roles: kept (%s)" % a["reason"])
 
     # vocal width: keep a doubled vocal forward (no spread -> no comb filter)
     vocal_class = "reverb"
@@ -102,6 +131,11 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     # the ORIGINAL master's highs: below the crossover keep the spatialised stem
     # signal, above it use the master's own top end (little localisation is lost
     # up there). Added to the FORCED layer so the auto-balance leaves it alone.
+    # HF-air restore reinjects the master's front highs above the crossover;
+    # the detail residual (if any) filled the band BELOW it, so the two combine
+    # into a full-band front reconstruction without doubling the top end.
+    if "residual" in stems:
+        _log(verbose, "  detail recovery: residual reinjected (< %d Hz)" % int(_AIR_CROSS))
     if original is not None:
         orig = _load_original(original, sr, chans.n)
         if orig is not None:
@@ -147,7 +181,9 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     channels = {c: chans.total(c) for c in LAYOUTS[fmt]}
 
     if adm:
-        from .adm import write_adm_bwf
+        from .adm import write_adm_bwf, BED, BED_RENDERER
+        renderer = (adm_order == "renderer")
+        bed = BED_RENDERER if renderer else BED
         sr_out = sr
         if sr != 48000:                       # Atmos requires 48 kHz
             from math import gcd
@@ -158,10 +194,12 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                         for k, v in channels.items()}
             _log(verbose, "  resampled %d -> 48000 Hz (Atmos)" % sr)
             sr_out = 48000
-        base = os.path.join(out_dir, "%s [Atmos %s]" % (track_label, preset))
+        tag = "ADM Renderer" if renderer else "Atmos"
+        base = os.path.join(out_dir, "%s [%s %s]" % (track_label, tag, preset))
         out = write_adm_bwf(base, channels, sr_out, objects=None,
-                            bits=adm_bits, program_name=track_label)
-        _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed, %d-bit)" % (out, adm_bits))
+                            bits=adm_bits, program_name=track_label, bed=bed)
+        _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed, %s order, %d-bit)"
+             % (out, "Renderer" if renderer else "playback", adm_bits))
         return out
 
     base = os.path.join(out_dir, "%s [%s %s]" % (track_label, fmt, preset))

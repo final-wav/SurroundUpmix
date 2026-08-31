@@ -18,8 +18,8 @@ texture stems (other/guitar/piano) - which is what real height channels want.
 import numpy as np
 
 from .decompose import decompose, lateral_pan
-from .dsp import db_to_lin, highpass
-from .layouts import LAYOUTS, has_heights, side_pair, surround_pair
+from .dsp import db_to_lin, decorrelate, highpass, lowpass
+from .layouts import LAYOUTS, has_backs, has_heights, side_pair, surround_pair
 
 TEXTURE = ("other", "guitar", "piano")
 
@@ -128,12 +128,25 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
         ds, dbk, dh = _auto_place(direct, ambient, p)
         chans.add(sl, ambient.L, p["amb_side"] + ds)
         chans.add(sr_ch, ambient.R, p["amb_side"] + ds)
-        # 7.1/7.1.2 have discrete backs; on 5.1 bl/br == the surround pair (folds in)
-        chans.add(bl, ambient.L, p["amb_back"] + dbk)
-        chans.add(br, ambient.R, p["amb_back"] + dbk)
+        # backs get a DECORRELATED copy of the same ambient, so the rear field
+        # envelops instead of collapsing onto the sides (SL and BL would be the
+        # identical signal otherwise). Only where backs are their own speakers -
+        # on 5.1 bl/br IS the side pair, so decorrelating there would just smear
+        # the one surround channel against itself.
+        do_dec = p.get("decorr", True)
+        if do_dec and has_backs(fmt):
+            aL_b, aR_b = decorrelate(ambient.L, sr, 0), decorrelate(ambient.R, sr, 1)
+        else:
+            aL_b, aR_b = ambient.L, ambient.R
+        chans.add(bl, aL_b, p["amb_back"] + dbk)
+        chans.add(br, aR_b, p["amb_back"] + dbk)
         if heights:
-            chans.add("TFL", highpass(ambient.L, p["height_hp"], sr), p["amb_height"] + dh)
-            chans.add("TFR", highpass(ambient.R, p["height_hp"], sr), p["amb_height"] + dh)
+            hL = highpass(ambient.L, p["height_hp"], sr)
+            hR = highpass(ambient.R, p["height_hp"], sr)
+            if do_dec:                       # heights decorrelated from the sides too
+                hL, hR = decorrelate(hL, sr, 2), decorrelate(hR, sr, 3)
+            chans.add("TFL", hL, p["amb_height"] + dh)
+            chans.add("TFR", hR, p["amb_height"] + dh)
         _lateral_arc(chans, direct, p)
         return
 
@@ -165,6 +178,42 @@ def _lateral_arc(chans, direct, p):
         chans.add(sl, direct.L, g)
         if bl != sl:
             chans.add(bl, direct.L, g - 4)
+
+
+def _route_residual(chans, stems, p, sr):
+    """Reinject the separation residual (original - sum of stems): the detail
+    Demucs failed to reproduce. Routed by the same direct/ambient rule - its
+    coherent part rebuilds the FRONT image (L/C/R matrix, forced so the balance
+    leaves this fidelity correction alone), its diffuse part gently wraps
+    (decorrelated), so lost air/room returns around the listener too."""
+    r = stems.get("residual")
+    if r is None:
+        return
+    rg = float(p.get("recover_gain", 0.0))
+    cross = float(p.get("recover_cross", 9000.0))   # HF-air restore owns the top
+    direct, ambient = decompose(r)
+    fmt = chans.fmt
+    sl, sr_ch = side_pair(fmt)
+    bl, br = surround_pair(fmt)
+    # coherent detail -> front, as L/C/R so the centre isn't double-counted.
+    # Band-limit the FRONT injection below the air crossover: above it the HF-air
+    # restore already replaces the front's highs from the master, so we'd double
+    # the top end otherwise. The diffuse wrap below stays full-band (air restore
+    # only touches the front, so recovered HF air is free to surround the listener).
+    mid = lowpass(0.5 * (direct.L + direct.R), cross, sr)
+    side = lowpass(0.5 * (direct.L - direct.R), cross, sr)
+    chans.add("FC", mid, rg, forced=True)
+    chans.add("FL", side, rg, forced=True)
+    chans.add("FR", -side, rg, forced=True)
+    # diffuse detail (air/room) -> gentle decorrelated wrap
+    chans.add(sl, ambient.L, rg - 3)
+    chans.add(sr_ch, ambient.R, rg - 3)
+    if has_backs(fmt):
+        chans.add(bl, decorrelate(ambient.L, sr, 0), rg - 6)
+        chans.add(br, decorrelate(ambient.R, sr, 1), rg - 6)
+    if has_heights(fmt):
+        chans.add("TFL", highpass(decorrelate(ambient.L, sr, 2), p["height_hp"], sr), rg - 8)
+        chans.add("TFR", highpass(decorrelate(ambient.R, sr, 3), p["height_hp"], sr), rg - 8)
 
 
 def _route_backing(chans, stems, p, backing_gain_db):
@@ -230,7 +279,7 @@ def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.
     place = place or {}
 
     for name, st in stems.items():
-        if name in ("backing", "vocals_full"):
+        if name in ("backing", "vocals_full", "residual"):
             continue
         direct, ambient = decompose(st)
         mode = str(place.get(name, "auto")).lower()
@@ -241,4 +290,5 @@ def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.
             _route_ambient(chans, name, ambient, direct, preset, sr, keep_vocal_forward)
 
     _route_backing(chans, stems, preset, backing_gain_db)
+    _route_residual(chans, stems, preset, sr)
     return chans

@@ -99,12 +99,30 @@ def main(argv=None):
     ap.add_argument("--rear-below-front", type=float, default=None)
     ap.add_argument("--vocal-mode", default="auto",
                     choices=["auto", "spread", "forward"])
+    ap.add_argument("--vocal-roles", default="auto",
+                    choices=["auto", "keep", "swap"],
+                    help="check the karaoke split from the signal: auto swaps a "
+                         "mislabelled lead/backing (or skips the split for a wet "
+                         "wash); keep trusts the model; swap forces a swap")
     ap.add_argument("--backing-gain", default="auto")
+    ap.add_argument("--decorrelate", default="on", choices=["on", "off"],
+                    help="phase-safe decorrelation of the backs/heights from the "
+                         "sides (7.1/7.1.2 only) so the rear field envelops; "
+                         "off = the previous behaviour")
+    ap.add_argument("--recover-detail", default="on", choices=["on", "off"],
+                    help="reinject what Demucs failed to reproduce (residual = "
+                         "original - sum of stems): the lost air / transients / "
+                         "quiet detail. off = old behaviour (HF-air restore only)")
     ap.add_argument("--keep-stems", action="store_true")
     ap.add_argument("--wav", action="store_true")
     ap.add_argument("--adm", action="store_true",
                     help="write a Dolby-Atmos ADM BWF master (7.1.2 bed, 48 kHz) "
                          "for the Dolby Atmos Renderer instead of FLAC/WAV")
+    ap.add_argument("--adm-order", default="playback",
+                    choices=["playback", "renderer"],
+                    help="ADM bed order: playback = rears at 5/6 (correct on the "
+                         "speaker rig); renderer = Dolby order, sides at 5/6 "
+                         "(correct when imported into the Dolby Atmos Renderer)")
     for stem in PLACE_STEMS:
         ap.add_argument("--place-%s" % stem, default="auto", choices=PLACE_ZONES,
                         help="force %s to a zone (auto = song-adaptive)" % stem)
@@ -143,6 +161,14 @@ def main(argv=None):
         print("ERROR: could not find separated stems under", sep, file=sys.stderr)
         return 1
 
+    # detail recovery: build the residual (original - sum of RAW stems) now,
+    # while only the raw Demucs stems exist in the folder (before the split adds
+    # lead/backing/vocals_full, which would double-count the vocal)
+    if args.recover_detail == "on":
+        from surroundupmix.recover import write_residual
+        res = write_residual(stems_dir, song)
+        print("  detail residual ->", res if res else "(could not build - skipped)")
+
     # lead/backing karaoke split
     if args.split_vocals != "off":
         print("==== Splitting vocal into lead + backing ====")
@@ -163,7 +189,9 @@ def main(argv=None):
         track_label=track, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
         backing_gain=args.backing_gain, force_wav=args.wav, place=place,
-        adm=args.adm, original=song)
+        adm=args.adm, adm_order=args.adm_order, original=song,
+        decorrelate=(args.decorrelate == "on"), vocal_roles=args.vocal_roles,
+        recover_detail=(args.recover_detail == "on"))
 
     if not args.keep_stems:
         shutil.rmtree(work, ignore_errors=True)

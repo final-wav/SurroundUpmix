@@ -37,8 +37,9 @@ class Stereo:
 
 
 # stem names Demucs may produce (4-stem and 6-stem models), plus our split extras
+# and the recovered separation residual (original - sum of stems)
 STEM_NAMES = ("bass", "drums", "vocals", "other", "guitar", "piano",
-              "backing", "vocals_full")
+              "backing", "vocals_full", "residual")
 
 
 def find_stem(folder, name):
