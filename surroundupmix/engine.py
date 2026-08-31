@@ -6,7 +6,7 @@ from . import presets as _presets
 from .balance import auto_balance, build_lfe, normalize
 from .detect import classify_vocal_width
 from .dsp import rms, highpass, db_to_lin
-from .io import load, load_stems, write_surround
+from .io import Stereo, load, load_stems, write_surround
 from .layouts import LAYOUTS, has_heights
 from .routing import spatialize
 
@@ -47,7 +47,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
                  adm=False, adm_bits=24, adm_order="playback", original=None,
                  decorrelate=True, vocal_roles="auto", recover_detail=True,
-                 recover_gain=0.0, verbose=True):
+                 recover_gain=0.0, binaural_amount=0.0, verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
 
     adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
@@ -117,6 +117,41 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                 g = 20 * np.log10(lr) - 20 * np.log10(br) - backing_below_lead
                 backing_gain_db = float(max(-12.0, min(6.0, g)))
                 _log(verbose, "  adaptive backing level: %.1f dB" % backing_gain_db)
+
+    # binaural depth steer: on genuinely binaural material (real interaural time
+    # difference) lean the diffuse field front/back per the detected cue. The
+    # effect is confidence * amount and hard-bounded, so a normal (pan-pot) song
+    # scores ~0 confidence and is untouched no matter where the slider sits.
+    p["binaural_back_db"] = 0.0
+    p["binaural_side_db"] = 0.0
+    if binaural_amount > 0:
+        from .binaural import analyze
+        bsig = None
+        if original is not None:
+            try:
+                bsig = load(original)
+            except Exception:
+                bsig = None
+        if bsig is None:
+            acc = None
+            for k, stv in stems.items():
+                if k in ("backing", "vocals_full", "residual"):
+                    continue
+                d = stv.data
+                acc = d.copy() if acc is None else (
+                    acc[:min(len(acc), len(d))] + d[:min(len(acc), len(d))])
+            if acc is not None:
+                bsig = Stereo(acc, sr)
+        if bsig is not None:
+            ba = analyze(bsig)
+            steer = ba["confidence"] * float(binaural_amount)
+            back = float(max(-5.0, min(5.0, steer * ba["rear_bias"] * 5.0)))
+            p["binaural_back_db"] = back
+            p["binaural_side_db"] = -0.5 * back
+            _log(verbose, "  binaural: confidence %.2f, ITD %.2f ms, rear_bias %+.2f"
+                 " -> back %+.1f dB (amount %.0f%%)"
+                 % (ba["confidence"], ba["itd_ms"], ba["rear_bias"], back,
+                    binaural_amount * 100))
 
     # spatialise
     chans = spatialize(stems, fmt, p, sr, vocal_class=vocal_class,

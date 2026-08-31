@@ -129,6 +129,10 @@ TIPS = {
                        "by the same rule (coherent detail up front, diffuse air wraps). "
                        "on = new default; off = old behaviour (HF-air restore only). "
                        "Song mode only.",
+    "Binaural depth": "For BINAURAL recordings (dummy-head, or an HRTF/binaural panner) that "
+                      "carry a real front/back cue. Leans the diffuse field front/back per the "
+                      "detected cue. It's multiplied by a measured binaural confidence, so a "
+                      "normal pan-pot song scores ~0 and stays untouched even at 100%. 0 = off.",
     "Vocal roles": "The karaoke split only LABELS one part 'lead' and the other 'backing'. "
                    "auto checks from the signal which is really the main vocal and swaps "
                    "them if the model got it backwards (e.g. a wet/filtered lead wrongly "
@@ -214,6 +218,7 @@ class App:
                 var.set(self.cfg[name])
         self._on_output()
         self._on_preset()
+        self._on_binaural()
 
     def _reg(self, name, var):
         self._cfg_vars[name] = var
@@ -466,6 +471,20 @@ class App:
             pc, "Vocal roles", VROLES, "auto", 1, 1, TIPS["Vocal roles"]))
         self.recover = self._reg("recover", self._combo(
             pc, "Detail recovery", ["on", "off"], "on", 1, 2, TIPS["Detail recovery"]))
+        # binaural depth slider (spans the row)
+        brow = ttk.Frame(pc)
+        brow.grid(row=2, column=0, columnspan=3, sticky="ew", padx=4, pady=(8, 2))
+        blab = ttk.Label(brow, text="Binaural depth", style="Muted.TLabel")
+        blab.pack(side="left")
+        self.binaural = self._reg("binaural", tk.DoubleVar(value=0))
+        self.binaural_lbl = tk.StringVar(value="off")
+        ttk.Label(brow, textvariable=self.binaural_lbl, style="Muted.TLabel",
+                  width=5).pack(side="right")
+        bsc = ttk.Scale(brow, from_=0, to=100, orient="horizontal",
+                        variable=self.binaural, command=self._on_binaural)
+        bsc.pack(side="left", fill="x", expand=True, padx=8)
+        ToolTip(blab, TIPS["Binaural depth"])
+        ToolTip(bsc, TIPS["Binaural depth"])
 
         # tuning row
         tc = ttk.Labelframe(self.adv, text="  Balance (blank = preset default)  ",
@@ -562,6 +581,10 @@ class App:
     # ---- reactive descriptions
     def _on_output(self):
         self.output_desc.set(OUTPUT_DESC.get(self.output.get(), ""))
+
+    def _on_binaural(self, _=None):
+        v = int(float(self.binaural.get()))
+        self.binaural_lbl.set("off" if v < 1 else "%d%%" % v)
 
     def _on_preset(self):
         self.preset_desc.set(PRESET_DESC.get(self.preset.get(), ""))
@@ -677,6 +700,8 @@ class App:
             common += ["--vocal-roles", self.vroles.get()]
         if self.recover.get() == "off":
             common += ["--recover-detail", "off"]
+        if int(float(self.binaural.get())) > 0:
+            common += ["--binaural", str(int(float(self.binaural.get())))]
         if kind == "song":
             cmd = [py, os.path.join(HERE, "allinone.py"), path,
                    "--device", self.device.get(), "--model", self.model.get(),

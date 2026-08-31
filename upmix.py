@@ -53,6 +53,10 @@ def main(argv=None):
     ap.add_argument("--recover-detail", default="on", choices=["on", "off"],
                     help="use a residual.flac (original - sum of stems) in the "
                          "folder to reinject the detail Demucs lost; off ignores it")
+    ap.add_argument("--binaural", type=int, default=0, metavar="0-100",
+                    help="front/back depth steer for BINAURAL material (0-100%%). "
+                         "Gated by a measured binaural confidence, so a normal "
+                         "pan-pot song is untouched even at 100. 0 = off")
     ap.add_argument("--decorrelate", default="on", choices=["on", "off"],
                     help="phase-safe decorrelation of the backs/heights from the "
                          "sides, so the rear field envelops instead of collapsing "
@@ -77,7 +81,9 @@ def main(argv=None):
             adm_order=args.adm_order, original=args.original,
             decorrelate=(args.decorrelate == "on"),
             vocal_roles=args.vocal_roles,
-            recover_detail=(args.recover_detail == "on"), verbose=not args.quiet)
+            recover_detail=(args.recover_detail == "on"),
+            binaural_amount=max(0.0, min(1.0, args.binaural / 100.0)),
+            verbose=not args.quiet)
     except Exception as e:
         print("ERROR:", e, file=sys.stderr)
         return 1

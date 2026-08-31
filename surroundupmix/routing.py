@@ -126,8 +126,11 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
     if name in TEXTURE:
         # full wrap: sides + backs + heights, song-adaptive per stem (auto-place)
         ds, dbk, dh = _auto_place(direct, ambient, p)
-        chans.add(sl, ambient.L, p["amb_side"] + ds)
-        chans.add(sr_ch, ambient.R, p["amb_side"] + ds)
+        # binaural front/back depth lean (0 unless a binaural cue was detected)
+        b_side = p.get("binaural_side_db", 0.0)
+        b_back = p.get("binaural_back_db", 0.0)
+        chans.add(sl, ambient.L, p["amb_side"] + ds + b_side)
+        chans.add(sr_ch, ambient.R, p["amb_side"] + ds + b_side)
         # backs get a DECORRELATED copy of the same ambient, so the rear field
         # envelops instead of collapsing onto the sides (SL and BL would be the
         # identical signal otherwise). Only where backs are their own speakers -
@@ -138,8 +141,8 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
             aL_b, aR_b = decorrelate(ambient.L, sr, 0), decorrelate(ambient.R, sr, 1)
         else:
             aL_b, aR_b = ambient.L, ambient.R
-        chans.add(bl, aL_b, p["amb_back"] + dbk)
-        chans.add(br, aR_b, p["amb_back"] + dbk)
+        chans.add(bl, aL_b, p["amb_back"] + dbk + b_back)
+        chans.add(br, aR_b, p["amb_back"] + dbk + b_back)
         if heights:
             hL = highpass(ambient.L, p["height_hp"], sr)
             hR = highpass(ambient.R, p["height_hp"], sr)

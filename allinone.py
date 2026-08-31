@@ -113,6 +113,10 @@ def main(argv=None):
                     help="reinject what Demucs failed to reproduce (residual = "
                          "original - sum of stems): the lost air / transients / "
                          "quiet detail. off = old behaviour (HF-air restore only)")
+    ap.add_argument("--binaural", type=int, default=0, metavar="0-100",
+                    help="front/back depth steer for BINAURAL material (0-100%%). "
+                         "Gated by a measured binaural confidence, so a normal "
+                         "pan-pot song is untouched even at 100. 0 = off")
     ap.add_argument("--keep-stems", action="store_true")
     ap.add_argument("--wav", action="store_true")
     ap.add_argument("--adm", action="store_true",
@@ -191,7 +195,8 @@ def main(argv=None):
         backing_gain=args.backing_gain, force_wav=args.wav, place=place,
         adm=args.adm, adm_order=args.adm_order, original=song,
         decorrelate=(args.decorrelate == "on"), vocal_roles=args.vocal_roles,
-        recover_detail=(args.recover_detail == "on"))
+        recover_detail=(args.recover_detail == "on"),
+        binaural_amount=max(0.0, min(1.0, args.binaural / 100.0)))
 
     if not args.keep_stems:
         shutil.rmtree(work, ignore_errors=True)

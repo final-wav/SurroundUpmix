@@ -484,6 +484,28 @@ def test_detail_recovery_reinjects_to_front():
     assert _rms(ch.total("FC")) > _rms(ch2.total("FC"))
 
 
+def test_binaural_detects_itd_not_panpot():
+    from surroundupmix.binaural import analyze
+    from surroundupmix.dsp import lowpass
+    n = SR * 4
+    rng = np.random.default_rng(21)
+    base = lowpass(rng.standard_normal(n).astype("float32"), 1200, SR)
+
+    # pan-pot: pure level difference, zero inter-channel delay -> not binaural
+    pan = Stereo(np.stack([base, 0.8 * base], 1).astype("float32"), SR)
+    cp = analyze(pan)["confidence"]
+
+    # binaural: R is L delayed ~0.3 ms (13 samples) -> a real ITD
+    d = 13
+    Rd = np.concatenate([np.zeros(d, "float32"), base[:-d]])
+    bina = analyze(Stereo(np.stack([base, Rd], 1).astype("float32"), SR))
+
+    assert cp < 0.2, ("pan-pot false-triggered", cp)
+    assert bina["confidence"] > 0.4, ("binaural not detected", bina["confidence"])
+    assert 0.2 < bina["itd_ms"] < 0.45          # ~0.3 ms recovered
+    assert -1.0 <= bina["rear_bias"] <= 1.0
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
