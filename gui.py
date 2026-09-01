@@ -221,6 +221,7 @@ class App:
         self._on_output()
         self._on_preset()
         self._on_binaural()
+        self._update_context()
 
     def _reg(self, name, var):
         self._cfg_vars[name] = var
@@ -410,8 +411,9 @@ class App:
             grid, "Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"], cb=True)
         self._reg("preset", self.preset)
         self._preset_cb.bind("<<ComboboxSelected>>", lambda e: self._on_preset())
-        self.device = self._reg("device", self._combo(
-            grid, "Device", DEVICES, "auto", 0, 2, TIPS["Device"]))
+        self.device, self._device_box = self._combo(
+            grid, "Device", DEVICES, "auto", 0, 2, TIPS["Device"], cb=True)
+        self._reg("device", self.device)
 
         self.output_desc = tk.StringVar(value=OUTPUT_DESC["7.1.2"])
         ttk.Label(oc, textvariable=self.output_desc, style="Hint.TLabel",
@@ -462,10 +464,14 @@ class App:
         pc.pack(fill="x", pady=(0, 8))
         for c in range(3):
             pc.columnconfigure(c, weight=1, uniform="p")
-        self.model = self._reg("model", self._combo(
-            pc, "Demucs model", MODELS, "htdemucs_ft", 0, 0, TIPS["Demucs model"]))
-        self.split = self._reg("split", self._combo(
-            pc, "Split vocals", SPLIT, "auto", 0, 1, TIPS["Split vocals"]))
+        self.model, self._model_box = self._combo(
+            pc, "Demucs model", MODELS, "htdemucs_ft", 0, 0, TIPS["Demucs model"], cb=True)
+        self._reg("model", self.model)
+        self._model_box.bind("<<ComboboxSelected>>", lambda e: self._update_context())
+        self.split, self._split_box = self._combo(
+            pc, "Split vocals", SPLIT, "auto", 0, 1, TIPS["Split vocals"], cb=True)
+        self._reg("split", self.split)
+        self._split_box.bind("<<ComboboxSelected>>", lambda e: self._update_context())
         self.vocal = self._reg("vocal", self._combo(
             pc, "Vocal mode", VOCAL, "auto", 0, 2, TIPS["Vocal mode"]))
         self.decorr = self._reg("decorr", self._combo(
@@ -512,44 +518,65 @@ class App:
                 row=0, column=c, sticky="w", padx=6, pady=(0, 3))
         self.place, self.level, self.mute, self.solo = {}, {}, {}, {}
         self.spread, self.lfe, self.center = {}, {}, None
+        self._instr_widgets = {}          # stem -> [label + control widgets] (phase 3)
         for i, stem in enumerate(INSTRUMENTS, start=1):
-            ttk.Label(pi, text=stem, style="Muted.TLabel").grid(
-                row=i, column=0, sticky="w", padx=6, pady=2)
+            w = []
+            nl = ttk.Label(pi, text=stem, style="Muted.TLabel")
+            nl.grid(row=i, column=0, sticky="w", padx=6, pady=2)
+            w.append(nl)
             zv = tk.StringVar(value="auto")
             zb = ttk.Combobox(pi, textvariable=zv, state="readonly", width=7,
                               values=["auto", "front", "side", "rear"])
             zb.grid(row=i, column=1, sticky="w", padx=6)
             zb.bind("<MouseWheel>", lambda e: "break")
             self.place[stem] = self._reg("place_" + stem, zv)
+            w.append(zb)
             lv = tk.StringVar(value="0")
-            ttk.Entry(pi, textvariable=lv, width=6).grid(row=i, column=2, sticky="w", padx=6)
+            le = ttk.Entry(pi, textvariable=lv, width=6)
+            le.grid(row=i, column=2, sticky="w", padx=6)
             self.level[stem] = self._reg("level_" + stem, lv)
+            w.append(le)
             if stem != "bass":                       # bass never wraps -> no spread
                 spv = tk.StringVar(value="")
-                ttk.Entry(pi, textvariable=spv, width=6).grid(
-                    row=i, column=3, sticky="w", padx=6)
+                se = ttk.Entry(pi, textvariable=spv, width=6)
+                se.grid(row=i, column=3, sticky="w", padx=6)
                 self.spread[stem] = self._reg("spread_" + stem, spv)
+                w.append(se)
             if stem == "vocals":                     # centre amount 0..100
                 cv = tk.StringVar(value="")
-                ttk.Entry(pi, textvariable=cv, width=6).grid(
-                    row=i, column=4, sticky="w", padx=6)
+                ce = ttk.Entry(pi, textvariable=cv, width=6)
+                ce.grid(row=i, column=4, sticky="w", padx=6)
                 self.center = self._reg("center_vocals", cv)
+                w.append(ce)
             elif stem in ("bass", "drums"):          # LFE send 0..100
                 fv = tk.StringVar(value="")
-                ttk.Entry(pi, textvariable=fv, width=6).grid(
-                    row=i, column=4, sticky="w", padx=6)
+                fe = ttk.Entry(pi, textvariable=fv, width=6)
+                fe.grid(row=i, column=4, sticky="w", padx=6)
                 self.lfe[stem] = self._reg("lfe_" + stem, fv)
+                w.append(fe)
             mv = tk.BooleanVar(value=False)
-            ttk.Checkbutton(pi, variable=mv).grid(row=i, column=5, padx=12)
+            mc = ttk.Checkbutton(pi, variable=mv)
+            mc.grid(row=i, column=5, padx=12)
             self.mute[stem] = self._reg("mute_" + stem, mv)
+            w.append(mc)
             sv = tk.BooleanVar(value=False)
-            ttk.Checkbutton(pi, variable=sv).grid(row=i, column=6, padx=12)
+            sc = ttk.Checkbutton(pi, variable=sv)
+            sc.grid(row=i, column=6, padx=12)
             self.solo[stem] = self._reg("solo_" + stem, sv)
+            w.append(sc)
+            self._instr_widgets[stem] = w
+        # footer: which instruments the settings will act on + reset
+        foot = ttk.Frame(pi)
+        foot.grid(row=len(INSTRUMENTS) + 1, column=0, columnspan=7, sticky="ew", pady=(8, 0))
+        self.instr_detected = tk.StringVar(value="")
+        ttk.Label(foot, textvariable=self.instr_detected, style="Muted.TLabel").pack(side="left")
+        ttk.Button(foot, text="Reset instruments", style="Link.TButton",
+                   command=self._reset_instruments).pack(side="right")
         ToolTip(pi, PLACE_TIP + "\n\nLevel = dB trim. Spread (blank = auto, 0-100) = "
                     "how far that instrument's ambient wraps; 0 holds it fully front. "
                     "Ctr/LFE = vocal centre amount (vocals) or LFE send (bass/drums), "
                     "0-100. Mute drops it; Solo plays only the soloed instruments. "
-                    "Rows for absent stems are ignored.")
+                    "Greyed rows aren't in the current queue/model, so they do nothing.")
 
     def _toggle_adv(self):
         self._adv_open = not self._adv_open
@@ -626,6 +653,74 @@ class App:
         v = int(float(self.binaural.get()))
         self.binaural_lbl.set("off" if v < 1 else "%d%%" % v)
 
+    # ---- phase 3: context reactivity (which instruments are actually live)
+    def _set_enabled(self, w, on):
+        try:
+            w.configure(state=("readonly" if isinstance(w, ttk.Combobox) else "normal")
+                        if on else "disabled")
+        except Exception:
+            pass
+
+    def _target_instruments(self):
+        """The stems the current queue + model/split will actually produce."""
+        kinds = {j["kind"] for j in self.jobs.values()}
+        have_song = "song" in kinds
+        have_stems = "stems" in kinds
+        det = set()
+        if have_stems:
+            from surroundupmix.stemnames import folder_stem_map
+            from surroundupmix.io import find_stem
+            for j in self.jobs.values():
+                if j["kind"] != "stems":
+                    continue
+                for nm in INSTRUMENTS:
+                    if find_stem(j["path"], nm):
+                        det.add(nm)
+                det |= set(folder_stem_map(j["path"]).keys())
+        model_set = {"bass", "drums", "vocals", "other"}
+        if self.model.get() == "htdemucs_6s":
+            model_set |= {"guitar", "piano"}
+        if self.split.get() != "off":
+            model_set.add("backing")
+        if have_song or not self.jobs:
+            det |= model_set
+        return det, have_song, have_stems
+
+    def _update_context(self):
+        """Grey the song-only controls for a stems-only queue, and grey the
+        per-instrument rows that won't exist for what's queued."""
+        try:
+            det, have_song, _ = self._target_instruments()
+        except Exception:
+            return
+        song_ctl_on = have_song or not self.jobs
+        self._set_enabled(self._model_box, song_ctl_on)
+        self._set_enabled(self._device_box, song_ctl_on)
+        for stem, widgets in getattr(self, "_instr_widgets", {}).items():
+            on = stem in det
+            for wdg in widgets:
+                if isinstance(wdg, ttk.Label):
+                    wdg.configure(foreground=(FG if on else BORDER))
+                else:
+                    self._set_enabled(wdg, on)
+        if hasattr(self, "instr_detected"):
+            live = ", ".join(s for s in INSTRUMENTS if s in det)
+            self.instr_detected.set("acts on: " + (live or "-"))
+
+    def _reset_instruments(self):
+        for stem in INSTRUMENTS:
+            self.place[stem].set("auto")
+            self.level[stem].set("0")
+            self.mute[stem].set(False)
+            self.solo[stem].set(False)
+            if stem in self.spread:
+                self.spread[stem].set("")
+            if stem in self.lfe:
+                self.lfe[stem].set("")
+        if self.center is not None:
+            self.center.set("")
+        self._update_context()
+
     def _on_preset(self):
         self.preset_desc.set(PRESET_DESC.get(self.preset.get(), ""))
         self._update_meters()
@@ -679,6 +774,7 @@ class App:
             self.jobs[iid] = {"path": path, "kind": kind}
             added += 1
         self.status.set("%d in queue" % len(self.jobs))
+        self._update_context()
         if added == 0 and paths:
             self._append("! nothing addable in that drop/selection\n")
 
@@ -714,6 +810,7 @@ class App:
             self.tree.delete(iid)
             self.jobs.pop(iid, None)
         self.status.set("%d in queue" % len(self.jobs))
+        self._update_context()
 
     def _clear_queue(self):
         if self.running:
@@ -722,6 +819,7 @@ class App:
             self.tree.delete(iid)
         self.jobs.clear()
         self.status.set("Ready")
+        self._update_context()
 
     # ------------------------------------------------------------ per-instrument
     def _overrides_dict(self):
