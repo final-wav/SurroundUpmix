@@ -14,11 +14,28 @@ import shutil
 import subprocess
 import tempfile
 
+import numpy as np
 import soundfile as sf
 
 from .io import Stereo, load
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def _match(st, sr, n):
+    """Bring a split output to the stems' sample rate and length. The Roformer
+    outputs at its own model rate (often 44.1k); if that differs from the stems'
+    rate, using it as-is plays it pitched/sped up and out of sync - so resample
+    back to `sr` and pad/trim to `n` samples."""
+    data = st.data
+    if st.sr != sr:
+        from math import gcd
+        from scipy.signal import resample_poly
+        g = gcd(sr, st.sr)
+        data = resample_poly(data, sr // g, st.sr // g, axis=0).astype(np.float32)
+    if len(data) < n:
+        data = np.concatenate([data, np.zeros((n - len(data), 2), np.float32)])
+    return Stereo(data[:n], sr)
 
 
 def default_split_python():
@@ -54,9 +71,11 @@ def maybe_split_vocals(stems, sr, mode="off", split_python=None, log=lambda m: N
         lead = os.path.join(out, "lead.flac")
         backing = os.path.join(out, "backing.flac")
         if r.returncode == 0 and os.path.isfile(lead) and os.path.isfile(backing):
-            stems["vocals_full"] = stems["vocals"]   # keep the full vocal (blend bed)
-            stems["vocals"] = load(lead)             # lead -> front
-            stems["backing"] = load(backing)         # backing -> surround wrap
+            full = stems["vocals"]
+            n = len(full)
+            stems["vocals_full"] = full              # keep the full vocal (blend bed)
+            stems["vocals"] = _match(load(lead), sr, n)     # lead -> front
+            stems["backing"] = _match(load(backing), sr, n)  # backing -> surround wrap
             log("  lead -> vocals (front), backing -> surround wrap")
         elif mode == "on":
             log("  (vocal split failed - continuing with the full vocal)")
