@@ -24,6 +24,7 @@ import os
 import queue
 import subprocess
 import sys
+import tempfile
 import threading
 
 import tkinter as tk
@@ -64,6 +65,7 @@ MODELS = ["htdemucs_ft", "htdemucs_6s", "htdemucs"]
 VROLES = ["auto", "keep", "swap"]
 OUTPUTS = ["5.1", "7.1", "7.1.2", "Dolby Atmos", "ADM BWF"]
 PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
+INSTRUMENTS = ("bass", "drums", "vocals", "other", "guitar", "piano", "backing")
 
 OUTPUT_DESC = {
     "5.1": "6-channel FLAC - plays on any 5.1 system.",
@@ -501,17 +503,35 @@ class App:
         self.backing = self._reg("backing", self._entry(
             tc, "Backing gain", "auto", 0, 2, TIPS["Backing gain"]))
 
-        # placement row
-        plc = ttk.Labelframe(self.adv, text="  Placement per stem  (auto = song-adaptive)  ",
-                             style="Card.TLabelframe", padding=12)
-        plc.pack(fill="x", pady=(0, 8))
-        for c in range(len(PLACE_STEMS)):
-            plc.columnconfigure(c, weight=1, uniform="pl")
-        self.place = {}
-        for i, stem in enumerate(PLACE_STEMS):
-            var = self._combo(plc, stem, ["auto", "front", "side", "rear"],
-                              "auto", 0, i, PLACE_TIP)
-            self.place[stem] = self._reg("place_" + stem, var)
+        # per-instrument row: zone + level + mute/solo, on top of the preset
+        pi = ttk.Labelframe(self.adv, text="  Per instrument  (on top of the preset)  ",
+                            style="Card.TLabelframe", padding=12)
+        pi.pack(fill="x", pady=(0, 8))
+        for c, txt in enumerate(("", "Zone", "Level dB", "Mute", "Solo")):
+            ttk.Label(pi, text=txt, style="Muted.TLabel").grid(
+                row=0, column=c, sticky="w", padx=6, pady=(0, 3))
+        self.place, self.level, self.mute, self.solo = {}, {}, {}, {}
+        for i, stem in enumerate(INSTRUMENTS, start=1):
+            ttk.Label(pi, text=stem, style="Muted.TLabel").grid(
+                row=i, column=0, sticky="w", padx=6, pady=2)
+            zv = tk.StringVar(value="auto")
+            zb = ttk.Combobox(pi, textvariable=zv, state="readonly", width=7,
+                              values=["auto", "front", "side", "rear"])
+            zb.grid(row=i, column=1, sticky="w", padx=6)
+            zb.bind("<MouseWheel>", lambda e: "break")
+            self.place[stem] = self._reg("place_" + stem, zv)
+            lv = tk.StringVar(value="0")
+            ttk.Entry(pi, textvariable=lv, width=6).grid(row=i, column=2, sticky="w", padx=6)
+            self.level[stem] = self._reg("level_" + stem, lv)
+            mv = tk.BooleanVar(value=False)
+            ttk.Checkbutton(pi, variable=mv).grid(row=i, column=3, padx=12)
+            self.mute[stem] = self._reg("mute_" + stem, mv)
+            sv = tk.BooleanVar(value=False)
+            ttk.Checkbutton(pi, variable=sv).grid(row=i, column=4, padx=12)
+            self.solo[stem] = self._reg("solo_" + stem, sv)
+        ToolTip(pi, PLACE_TIP + "\n\nLevel = dB trim on that instrument. Mute drops "
+                    "it; Solo plays only the soloed instruments. Rows for stems not "
+                    "present in a job are ignored.")
 
     def _toggle_adv(self):
         self._adv_open = not self._adv_open
@@ -685,6 +705,43 @@ class App:
         self.jobs.clear()
         self.status.set("Ready")
 
+    # ------------------------------------------------------------ per-instrument
+    def _overrides_dict(self):
+        """Collect the per-instrument rows into the overrides structure. Solo is
+        resolved here: if anything is soloed, every non-soloed stem is muted."""
+        soloed = [s for s in INSTRUMENTS if self.solo[s].get()]
+        out = {}
+        for stem in INSTRUMENTS:
+            d = {}
+            z = self.place[stem].get()
+            if z and z != "auto":
+                d["zone"] = z
+            try:
+                lv = float(self.level[stem].get().strip().replace(",", "."))
+            except ValueError:
+                lv = 0.0
+            if lv:
+                d["level"] = lv
+            if self.mute[stem].get() or (soloed and stem not in soloed):
+                d["mute"] = True
+            if d:
+                out[stem] = d
+        return out
+
+    def _write_overrides(self):
+        """Write the overrides JSON for this run; sets self._ovr_path (or None)."""
+        ov = self._overrides_dict()
+        if not ov:
+            self._ovr_path = None
+            return
+        try:
+            path = os.path.join(tempfile.gettempdir(), "surroundupmix_overrides.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(ov, f)
+            self._ovr_path = path
+        except Exception:
+            self._ovr_path = None
+
     # ------------------------------------------------------------ run
     def _cmd_for(self, job):
         py = sys.executable
@@ -719,10 +776,8 @@ class App:
         od = self.outdir.get().strip()
         if od:
             cmd += ["--out-dir", od]
-        for stem, var in self.place.items():
-            v = var.get()
-            if v and v != "auto":
-                cmd += ["--place-%s" % stem, v]
+        if getattr(self, "_ovr_path", None):
+            cmd += ["--overrides", self._ovr_path]
         if atmos:
             cmd += ["--adm"]
         elif admr:
@@ -733,6 +788,7 @@ class App:
         if self.running:
             return
         self._save_cfg()
+        self._write_overrides()
         pending = [iid for iid in self.tree.get_children()
                    if self.tree.set(iid, "status").endswith("queued")
                    or self.tree.set(iid, "status").endswith("failed")]

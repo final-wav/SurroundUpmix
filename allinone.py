@@ -127,11 +127,18 @@ def main(argv=None):
                     help="ADM bed order: playback = rears at 5/6 (correct on the "
                          "speaker rig); renderer = Dolby order, sides at 5/6 "
                          "(correct when imported into the Dolby Atmos Renderer)")
+    ap.add_argument("--overrides", default=None, metavar="FILE.json",
+                    help="per-instrument settings (zone/level/mute/...) as JSON; "
+                         "sits on top of the preset. See surroundupmix/overrides.py")
     for stem in PLACE_STEMS:
         ap.add_argument("--place-%s" % stem, default="auto", choices=PLACE_ZONES,
                         help="force %s to a zone (auto = song-adaptive)" % stem)
     args = ap.parse_args(argv)
     place = {s: getattr(args, "place_" + s) for s in PLACE_STEMS}
+    overrides = None
+    if args.overrides:
+        from surroundupmix.overrides import load as _load_ov
+        overrides = _load_ov(args.overrides)
 
     song = os.path.abspath(args.song)
     if not os.path.isfile(song):
@@ -190,7 +197,7 @@ def main(argv=None):
                                         else args.format))
     out = upmix_folder(
         stems_dir, fmt=args.format, preset=args.preset, out_dir=out_dir,
-        track_label=track, rear_gain=args.rear_gain,
+        track_label=track, overrides=overrides, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
         backing_gain=args.backing_gain, force_wav=args.wav, place=place,
         adm=args.adm, adm_order=args.adm_order, original=song,

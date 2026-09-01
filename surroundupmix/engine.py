@@ -45,6 +45,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
+                 overrides=None,
                  adm=False, adm_bits=24, adm_order="playback", original=None,
                  decorrelate=True, vocal_roles="auto", recover_detail=True,
                  recover_gain=0.0, binaural_amount=0.0, verbose=True):
@@ -57,6 +58,9 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     if adm:
         fmt = "7.1.2"   # the Atmos bed is 7.1.2
     stems, sr = load_stems(stems_folder)
+    from .overrides import normalize as _norm_ov, zones as _ov_zones
+    ov = _norm_ov(overrides)
+    place = {**(place or {}), **_ov_zones(ov)}   # overrides' zones win over --place
     p = _presets.get(preset)
     if rear_below_front is not None:
         p["rear_below_front"] = rear_below_front
@@ -155,7 +159,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
 
     # spatialise
     chans = spatialize(stems, fmt, p, sr, vocal_class=vocal_class,
-                       backing_gain_db=backing_gain_db, place=place)
+                       backing_gain_db=backing_gain_db, place=place, overrides=ov)
 
     # LFE
     lfe = build_lfe(stems, p["lfe_cross"], sr)

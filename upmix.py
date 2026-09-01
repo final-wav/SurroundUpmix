@@ -62,6 +62,9 @@ def main(argv=None):
                          "sides, so the rear field envelops instead of collapsing "
                          "onto the sides (7.1/7.1.2 only). off = the previous behaviour")
     ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("--overrides", default=None, metavar="FILE.json",
+                    help="per-instrument settings (zone/level/mute/...) as JSON; "
+                         "sits on top of the preset. See surroundupmix/overrides.py")
     _place_stems = ("vocals", "bass", "drums", "other", "guitar", "piano")
     for stem in _place_stems:
         ap.add_argument("--place-%s" % stem, default="auto",
@@ -69,11 +72,15 @@ def main(argv=None):
                         help="force %s to a zone (auto = song-adaptive)" % stem)
     args = ap.parse_args(argv)
     place = {s: getattr(args, "place_" + s) for s in _place_stems}
+    overrides = None
+    if args.overrides:
+        from surroundupmix.overrides import load as _load_ov
+        overrides = _load_ov(args.overrides)
 
     try:
         out = upmix_folder(
             args.stems_folder, fmt=args.format, preset=args.preset,
-            out_dir=args.out_dir, track_label=args.track_label,
+            out_dir=args.out_dir, track_label=args.track_label, overrides=overrides,
             rear_gain=args.rear_gain, rear_below_front=args.rear_below_front,
             vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
             lfe_cross=args.lfe_cross, norm_level=args.norm_level,

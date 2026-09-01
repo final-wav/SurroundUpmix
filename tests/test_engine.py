@@ -544,6 +544,45 @@ def test_load_stems_from_descriptive_folder():
     assert _rms(dr_stem.L - dr_stem.R) > 1e-3
 
 
+def test_overrides_normalize():
+    from surroundupmix.overrides import normalize
+    n = normalize({
+        "drums": {"level": 3, "mute": False},
+        "bogus": {"level": 2},                       # unknown stem -> dropped
+        "vocals": {"zone": "rear", "level": "x"},    # bad level dropped, zone kept
+        "bass": {"zone": "auto"},                    # nothing meaningful -> dropped
+    })
+    assert n["drums"] == {"level": 3.0}
+    assert "bogus" not in n
+    assert n["vocals"] == {"zone": "rear"}
+    assert "bass" not in n
+
+
+def test_per_instrument_mute_level_zone():
+    from surroundupmix.routing import spatialize
+    n = SR
+    t = np.arange(n) / SR
+    rng = np.random.default_rng(31)
+    stems = {
+        "other": Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR),
+        "vocals": Stereo(np.stack([0.2 * np.sin(2 * np.pi * 220 * t)] * 2, 1).astype("float32"), SR),
+    }
+    p = _presets.get("immersive")
+    base = spatialize(stems, "7.1", p, SR)
+
+    # mute vocals -> the centre loses the vocal
+    muted = spatialize(stems, "7.1", p, SR, overrides={"vocals": {"mute": True}})
+    assert _rms(muted.total("FC")) < 0.5 * _rms(base.total("FC"))
+
+    # +6 dB on 'other' -> its side wrap is clearly louder
+    louder = spatialize(stems, "7.1", p, SR, overrides={"other": {"level": 6.0}})
+    assert _rms(louder.total("SL")) > 1.5 * _rms(base.total("SL"))
+
+    # zone override forces 'other' to the rears (forced layer, balance-exempt)
+    rear = spatialize(stems, "7.1", p, SR, overrides={"other": {"zone": "rear"}})
+    assert _rms(rear.forced["BL"]) > 0
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

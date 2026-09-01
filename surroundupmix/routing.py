@@ -19,6 +19,7 @@ import numpy as np
 
 from .decompose import decompose, lateral_pan
 from .dsp import db_to_lin, decorrelate, highpass, lowpass
+from .io import Stereo
 from .layouts import LAYOUTS, has_backs, has_heights, side_pair, surround_pair
 
 TEXTURE = ("other", "guitar", "piano")
@@ -219,7 +220,7 @@ def _route_residual(chans, stems, p, sr):
         chans.add("TFR", highpass(decorrelate(ambient.R, sr, 3), p["height_hp"], sr), rg - 8)
 
 
-def _route_backing(chans, stems, p, backing_gain_db):
+def _route_backing(chans, stems, p, backing_gain_db, ov=None):
     """Backing vocals (from the karaoke split) are their OWN content, so they
     wrap the rears full-range with zero phase risk. A quiet front anchor keeps
     word transitions from jumping, and the full clean vocal is laid underneath
@@ -227,7 +228,10 @@ def _route_backing(chans, stems, p, backing_gain_db):
     backing = stems.get("backing")
     if backing is None:
         return
-    bg = backing_gain_db
+    ov = ov or {}
+    if ov.get("mute"):
+        return
+    bg = backing_gain_db + ov.get("level", 0.0)
     bl, br = surround_pair(chans.fmt)
     heights = has_heights(chans.fmt)
     # front anchor (divergence) + dry localisable choir behind
@@ -271,27 +275,35 @@ def _route_forced(chans, name, direct, ambient, zone, p, sr):
 
 
 def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.0,
-               place=None):
+               place=None, overrides=None):
     """Build the spatial channels (everything except the final LFE + balance).
-    `place` is an optional {stem: 'auto'|'front'|'side'|'rear'} of manual overrides.
-    Returns a Channels object.
+    `place` is {stem: 'auto'|'front'|'side'|'rear'} of manual placement.
+    `overrides` is {stem: {zone,level,mute,...}} of per-instrument settings that
+    sit on top of the preset. Returns a Channels object.
     """
     n = max(len(s) for s in stems.values())
     chans = Channels(fmt, n)
     keep_vocal_forward = (vocal_class == "double")
     place = place or {}
+    overrides = overrides or {}
 
     for name, st in stems.items():
         if name in ("backing", "vocals_full", "residual"):
             continue
+        ov = overrides.get(name, {})
+        if ov.get("mute"):
+            continue                                   # instrument dropped
+        lv = ov.get("level", 0.0)
+        if lv:
+            st = Stereo(st.data * db_to_lin(lv), st.sr)  # per-instrument level trim
         direct, ambient = decompose(st)
-        mode = str(place.get(name, "auto")).lower()
+        mode = str(ov.get("zone", place.get(name, "auto"))).lower()
         if mode in ("front", "side", "rear"):
             _route_forced(chans, name, direct, ambient, mode, preset, sr)
         else:
             _route_direct(chans, name, direct, preset)
             _route_ambient(chans, name, ambient, direct, preset, sr, keep_vocal_forward)
 
-    _route_backing(chans, stems, preset, backing_gain_db)
+    _route_backing(chans, stems, preset, backing_gain_db, overrides.get("backing", {}))
     _route_residual(chans, stems, preset, sr)
     return chans
