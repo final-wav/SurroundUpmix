@@ -311,6 +311,9 @@ class App:
                   "direct stays front, ambient wraps",
                   style="Sub.TLabel").pack(anchor="w")
 
+        # Start / Stop sit at the top (fixed, always visible) above the scroll body
+        self._build_actions(self.root)
+
         # Scrollable body: the window stays a fixed size and the content scrolls,
         # so expanding "Advanced" or a longer mode description never grows the
         # window off-screen (and never makes it jump around).
@@ -332,7 +335,6 @@ class App:
         self._build_input(body)
         self._build_output(body)
         self._build_advanced(body)
-        self._build_actions(body)
         self._build_log(body)
 
     def _on_wheel(self, event):
@@ -514,16 +516,16 @@ class App:
     def _toggle_adv(self):
         self._adv_open = not self._adv_open
         if self._adv_open:
-            self.adv.pack(fill="x", before=self.act, pady=(0, 4))
+            self.adv.pack(fill="x", before=self.logframe, pady=(0, 4))
             self.adv_btn.configure(text="▾  Advanced  (model, split, tuning, placement)")
         else:
             self.adv.pack_forget()
             self.adv_btn.configure(text="▸  Advanced  (model, split, tuning, placement)")
 
     # ---- actions
-    def _build_actions(self, body):
-        self.act = ttk.Frame(body, style="Bg.TFrame")
-        self.act.pack(fill="x", pady=(6, 8))
+    def _build_actions(self, parent):
+        self.act = ttk.Frame(parent, style="Bg.TFrame")
+        self.act.pack(fill="x", padx=18, pady=(2, 8))
         self.start_btn = ttk.Button(self.act, text="▶  Start queue",
                                     style="Accent.TButton", command=self._start)
         self.start_btn.pack(side="left")
@@ -536,7 +538,7 @@ class App:
 
     # ---- log
     def _build_log(self, body):
-        lw = ttk.Frame(body, style="Bg.TFrame")
+        lw = self.logframe = ttk.Frame(body, style="Bg.TFrame")
         lw.pack(fill="both", expand=True)
         self.log = tk.Text(lw, bg=LOG_BG, fg="#c8ccd2", insertbackground=FG,
                            relief="flat", height=7, wrap="word", padx=10, pady=8,
