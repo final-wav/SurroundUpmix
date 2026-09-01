@@ -583,6 +583,40 @@ def test_per_instrument_mute_level_zone():
     assert _rms(rear.forced["BL"]) > 0
 
 
+def test_per_instrument_spread_center_lfe():
+    from surroundupmix.routing import spatialize
+    from surroundupmix.balance import build_lfe
+    n = SR
+    t = np.arange(n) / SR
+    rng = np.random.default_rng(41)
+    stems = {
+        "other": Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR),
+        "vocals": Stereo(np.stack([0.2 * np.sin(2 * np.pi * 220 * t)] * 2, 1).astype("float32"), SR),
+        "bass": Stereo(np.stack([0.3 * np.sin(2 * np.pi * 60 * t)] * 2, 1).astype("float32"), SR),
+        "drums": Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR),
+    }
+    p = _presets.get("immersive")
+    base = spatialize(stems, "7.1", p, SR)
+
+    # spread 0 -> 'other' held fully front, so it drops out of the side wrap
+    z0 = spatialize(stems, "7.1", p, SR, overrides={"other": {"spread": 0}})
+    assert _rms(z0.total("SL")) < _rms(base.total("SL"))
+    # spread 100 wraps 'other' louder than spread 20
+    hi = spatialize(stems, "7.1", p, SR, overrides={"other": {"spread": 100}})
+    lo = spatialize(stems, "7.1", p, SR, overrides={"other": {"spread": 20}})
+    assert _rms(hi.total("SL")) > _rms(lo.total("SL"))
+
+    # vocal centre 100 puts far more into FC than centre 0
+    c100 = spatialize(stems, "7.1", p, SR, overrides={"vocals": {"center": 100}})
+    c0 = spatialize(stems, "7.1", p, SR, overrides={"vocals": {"center": 0}})
+    assert _rms(c100.total("FC")) > 2 * _rms(c0.total("FC"))
+
+    # LFE send: zeroing bass+drums LFE makes the LFE near-silent vs the default
+    lfe_full = build_lfe(stems, 120, SR)
+    lfe_none = build_lfe(stems, 120, SR, overrides={"bass": {"lfe": 0}, "drums": {"lfe": 0}})
+    assert _rms(lfe_none) < 0.1 * _rms(lfe_full)
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

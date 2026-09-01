@@ -503,14 +503,15 @@ class App:
         self.backing = self._reg("backing", self._entry(
             tc, "Backing gain", "auto", 0, 2, TIPS["Backing gain"]))
 
-        # per-instrument row: zone + level + mute/solo, on top of the preset
+        # per-instrument panel: zone + level + spread + centre/LFE + mute/solo
         pi = ttk.Labelframe(self.adv, text="  Per instrument  (on top of the preset)  ",
                             style="Card.TLabelframe", padding=12)
         pi.pack(fill="x", pady=(0, 8))
-        for c, txt in enumerate(("", "Zone", "Level dB", "Mute", "Solo")):
+        for c, txt in enumerate(("", "Zone", "Level dB", "Spread", "Ctr/LFE", "Mute", "Solo")):
             ttk.Label(pi, text=txt, style="Muted.TLabel").grid(
                 row=0, column=c, sticky="w", padx=6, pady=(0, 3))
         self.place, self.level, self.mute, self.solo = {}, {}, {}, {}
+        self.spread, self.lfe, self.center = {}, {}, None
         for i, stem in enumerate(INSTRUMENTS, start=1):
             ttk.Label(pi, text=stem, style="Muted.TLabel").grid(
                 row=i, column=0, sticky="w", padx=6, pady=2)
@@ -523,15 +524,32 @@ class App:
             lv = tk.StringVar(value="0")
             ttk.Entry(pi, textvariable=lv, width=6).grid(row=i, column=2, sticky="w", padx=6)
             self.level[stem] = self._reg("level_" + stem, lv)
+            if stem != "bass":                       # bass never wraps -> no spread
+                spv = tk.StringVar(value="")
+                ttk.Entry(pi, textvariable=spv, width=6).grid(
+                    row=i, column=3, sticky="w", padx=6)
+                self.spread[stem] = self._reg("spread_" + stem, spv)
+            if stem == "vocals":                     # centre amount 0..100
+                cv = tk.StringVar(value="")
+                ttk.Entry(pi, textvariable=cv, width=6).grid(
+                    row=i, column=4, sticky="w", padx=6)
+                self.center = self._reg("center_vocals", cv)
+            elif stem in ("bass", "drums"):          # LFE send 0..100
+                fv = tk.StringVar(value="")
+                ttk.Entry(pi, textvariable=fv, width=6).grid(
+                    row=i, column=4, sticky="w", padx=6)
+                self.lfe[stem] = self._reg("lfe_" + stem, fv)
             mv = tk.BooleanVar(value=False)
-            ttk.Checkbutton(pi, variable=mv).grid(row=i, column=3, padx=12)
+            ttk.Checkbutton(pi, variable=mv).grid(row=i, column=5, padx=12)
             self.mute[stem] = self._reg("mute_" + stem, mv)
             sv = tk.BooleanVar(value=False)
-            ttk.Checkbutton(pi, variable=sv).grid(row=i, column=4, padx=12)
+            ttk.Checkbutton(pi, variable=sv).grid(row=i, column=6, padx=12)
             self.solo[stem] = self._reg("solo_" + stem, sv)
-        ToolTip(pi, PLACE_TIP + "\n\nLevel = dB trim on that instrument. Mute drops "
-                    "it; Solo plays only the soloed instruments. Rows for stems not "
-                    "present in a job are ignored.")
+        ToolTip(pi, PLACE_TIP + "\n\nLevel = dB trim. Spread (blank = auto, 0-100) = "
+                    "how far that instrument's ambient wraps; 0 holds it fully front. "
+                    "Ctr/LFE = vocal centre amount (vocals) or LFE send (bass/drums), "
+                    "0-100. Mute drops it; Solo plays only the soloed instruments. "
+                    "Rows for absent stems are ignored.")
 
     def _toggle_adv(self):
         self._adv_open = not self._adv_open
@@ -710,18 +728,34 @@ class App:
         """Collect the per-instrument rows into the overrides structure. Solo is
         resolved here: if anything is soloed, every non-soloed stem is muted."""
         soloed = [s for s in INSTRUMENTS if self.solo[s].get()]
+
+        def num(var):
+            try:
+                return float(var.get().strip().replace(",", "."))
+            except (ValueError, AttributeError):
+                return None
+
         out = {}
         for stem in INSTRUMENTS:
             d = {}
             z = self.place[stem].get()
             if z and z != "auto":
                 d["zone"] = z
-            try:
-                lv = float(self.level[stem].get().strip().replace(",", "."))
-            except ValueError:
-                lv = 0.0
+            lv = num(self.level[stem])
             if lv:
                 d["level"] = lv
+            if stem in self.spread:
+                sp = num(self.spread[stem])
+                if sp is not None:
+                    d["spread"] = sp
+            if stem == "vocals" and self.center is not None:
+                c = num(self.center)
+                if c is not None:
+                    d["center"] = c
+            if stem in self.lfe:
+                lf = num(self.lfe[stem])
+                if lf is not None:
+                    d["lfe"] = lf
             if self.mute[stem].get() or (soloed and stem not in soloed):
                 d["mute"] = True
             if d:

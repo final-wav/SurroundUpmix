@@ -13,18 +13,34 @@ from .layouts import FRONT_SET, REAR_SET, LAYOUTS
 LFE_REPRO_OFFSET_DB = -10.0
 
 
-def build_lfe(stems, cross, sr, gain_db=-3.0):
+def build_lfe(stems, cross, sr, gain_db=-3.0, overrides=None):
     """LFE from the real low end of BASS + kick (drums low band), not a
     low-pass of the whole mix - keeps it tight instead of muddy. The written
-    level carries the -10 dB LFE reproduction offset (see above)."""
+    level carries the -10 dB LFE reproduction offset (see above).
+
+    Per-instrument overrides: bass/drums 'lfe' (0..100, default 100/70 = the
+    1.0/0.7 mix) scale each stem's LFE send; a muted stem sends nothing."""
+    ov = overrides or {}
+
+    def send(stem, default_mul):
+        o = ov.get(stem, {})
+        if o.get("mute"):
+            return 0.0
+        lfe = o.get("lfe")
+        return default_mul if lfe is None else float(lfe) / 100.0
+
     n = max(len(s) for s in stems.values())
     acc = np.zeros(n, dtype=np.float32)
     if "bass" in stems:
-        m = mono(stems["bass"])
-        acc[:len(m)] += m
+        mul = send("bass", 1.0)
+        if mul:
+            m = mono(stems["bass"])
+            acc[:len(m)] += m * mul
     if "drums" in stems:
-        m = mono(stems["drums"])
-        acc[:len(m)] += m * 0.7   # kick body, a touch under the bass
+        mul = send("drums", 0.7)   # kick body, a touch under the bass
+        if mul:
+            m = mono(stems["drums"])
+            acc[:len(m)] += m * mul
     if "bass" not in stems and "drums" not in stems:
         # fall back to the full mix low end
         for st in stems.values():

@@ -162,7 +162,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                        backing_gain_db=backing_gain_db, place=place, overrides=ov)
 
     # LFE
-    lfe = build_lfe(stems, p["lfe_cross"], sr)
+    lfe = build_lfe(stems, p["lfe_cross"], sr, overrides=ov)
     chans.data["LFE"][:len(lfe)] += lfe[:chans.n]
 
     # HF air restore: neural separation loses the top octave and the stems no

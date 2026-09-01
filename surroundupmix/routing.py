@@ -57,10 +57,10 @@ class Channels:
         return self.data[ch] + self.forced[ch]
 
 
-def _route_direct(chans, name, direct, p, forced=False):
+def _route_direct(chans, name, direct, p, forced=False, center=None):
     """DIRECT -> front image."""
     if name == "vocals":
-        c = float(p["vocal_center"])
+        c = float(p["vocal_center"]) if center is None else float(center)
         g = p["vocal_front"]
         chans.add("FC", 0.5 * (direct.L + direct.R), g + _c2db(c), forced=forced)
         chans.add("FL", direct.L, g + _c2db(1 - c), forced=forced)
@@ -102,26 +102,29 @@ def _auto_place(direct, ambient, p):
     return base + wide, base, base
 
 
-def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
-    """AMBIENT -> surround field, by category modulation."""
+def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward,
+                   wrap_db=0.0, no_wrap=False):
+    """AMBIENT -> surround field, by category modulation. `wrap_db` is a
+    per-instrument spread offset (dB) added to every wrap gain; `no_wrap` holds
+    the stem fully forward (spread = 0)."""
     fmt = chans.fmt
     sl, sr_ch = side_pair(fmt)
     bl, br = surround_pair(fmt)
     heights = has_heights(fmt)
 
-    if name == "bass":
-        return  # bass stays front + LFE, never wraps
+    if name == "bass" or no_wrap:
+        return  # bass (or spread 0) stays front + LFE, never wraps
 
     if name == "drums":
-        chans.add(sl, ambient.L, p["drum_side"])
-        chans.add(sr_ch, ambient.R, p["drum_side"])
+        chans.add(sl, ambient.L, p["drum_side"] + wrap_db)
+        chans.add(sr_ch, ambient.R, p["drum_side"] + wrap_db)
         return
 
     if name == "vocals":
         if keep_vocal_forward:
             return  # doubled vocal: no spread (would comb-filter)
-        chans.add(sl, ambient.L, p["voc_side"])
-        chans.add(sr_ch, ambient.R, p["voc_side"])
+        chans.add(sl, ambient.L, p["voc_side"] + wrap_db)
+        chans.add(sr_ch, ambient.R, p["voc_side"] + wrap_db)
         return
 
     if name in TEXTURE:
@@ -130,8 +133,8 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
         # binaural front/back depth lean (0 unless a binaural cue was detected)
         b_side = p.get("binaural_side_db", 0.0)
         b_back = p.get("binaural_back_db", 0.0)
-        chans.add(sl, ambient.L, p["amb_side"] + ds + b_side)
-        chans.add(sr_ch, ambient.R, p["amb_side"] + ds + b_side)
+        chans.add(sl, ambient.L, p["amb_side"] + ds + b_side + wrap_db)
+        chans.add(sr_ch, ambient.R, p["amb_side"] + ds + b_side + wrap_db)
         # backs get a DECORRELATED copy of the same ambient, so the rear field
         # envelops instead of collapsing onto the sides (SL and BL would be the
         # identical signal otherwise). Only where backs are their own speakers -
@@ -142,21 +145,21 @@ def _route_ambient(chans, name, ambient, direct, p, sr, keep_vocal_forward):
             aL_b, aR_b = decorrelate(ambient.L, sr, 0), decorrelate(ambient.R, sr, 1)
         else:
             aL_b, aR_b = ambient.L, ambient.R
-        chans.add(bl, aL_b, p["amb_back"] + dbk + b_back)
-        chans.add(br, aR_b, p["amb_back"] + dbk + b_back)
+        chans.add(bl, aL_b, p["amb_back"] + dbk + b_back + wrap_db)
+        chans.add(br, aR_b, p["amb_back"] + dbk + b_back + wrap_db)
         if heights:
             hL = highpass(ambient.L, p["height_hp"], sr)
             hR = highpass(ambient.R, p["height_hp"], sr)
             if do_dec:                       # heights decorrelated from the sides too
                 hL, hR = decorrelate(hL, sr, 2), decorrelate(hR, sr, 3)
-            chans.add("TFL", hL, p["amb_height"] + dh)
-            chans.add("TFR", hR, p["amb_height"] + dh)
+            chans.add("TFL", hL, p["amb_height"] + dh + wrap_db)
+            chans.add("TFR", hR, p["amb_height"] + dh + wrap_db)
         _lateral_arc(chans, direct, p)
         return
 
     # any other stem name: treat as texture-lite (sides only)
-    chans.add(sl, ambient.L, p["amb_side"])
-    chans.add(sr_ch, ambient.R, p["amb_side"])
+    chans.add(sl, ambient.L, p["amb_side"] + wrap_db)
+    chans.add(sr_ch, ambient.R, p["amb_side"] + wrap_db)
 
 
 def _lateral_arc(chans, direct, p):
@@ -301,8 +304,19 @@ def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.
         if mode in ("front", "side", "rear"):
             _route_forced(chans, name, direct, ambient, mode, preset, sr)
         else:
-            _route_direct(chans, name, direct, preset)
-            _route_ambient(chans, name, ambient, direct, preset, sr, keep_vocal_forward)
+            # per-instrument spread (how far the ambient wraps) and vocal centre
+            wrap_db, no_wrap = 0.0, False
+            spread = ov.get("spread")
+            if spread is not None:
+                if spread <= 0:
+                    no_wrap = True                     # hold fully forward
+                else:
+                    wrap_db = (float(spread) - 50.0) * 0.12   # +-6 dB around neutral
+            center = ov.get("center")
+            center = None if center is None else float(center) / 100.0
+            _route_direct(chans, name, direct, preset, center=center)
+            _route_ambient(chans, name, ambient, direct, preset, sr,
+                           keep_vocal_forward, wrap_db=wrap_db, no_wrap=no_wrap)
 
     _route_backing(chans, stems, preset, backing_gain_db, overrides.get("backing", {}))
     _route_residual(chans, stems, preset, sr)
