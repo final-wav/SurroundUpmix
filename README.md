@@ -71,8 +71,11 @@ that are physical, not stylistic:
   cover split artifacts.
 - **Heights (7.1.2)**: fed from the decorrelated ambient of the texture stems,
   high-passed. Height channels want air, not a low-passed copy of the mix.
-- **LFE**: built from the low end of bass + kick, band-limited at the crossover,
-  not a low-pass of the whole mix.
+- **LFE**: built from the low end of bass + kick, band-limited at the crossover
+  (and high-passed at 20 Hz), not a low-pass of the whole mix. It carries the
+  standard −10 dB LFE reproduction offset (ITU-R BR.1384), since AVRs and the
+  Dolby Atmos renderer play the LFE +10 dB louder than the mains; without it the
+  sub is far too hot, especially as the bass is already full-range in the mains.
 - **Rear/front balance**: the finished rear field is measured against the front
   and trimmed to a set amount below it, per song, so a busy track and a dry one
   land at the same front-to-back balance.

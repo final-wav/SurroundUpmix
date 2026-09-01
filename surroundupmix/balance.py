@@ -1,13 +1,22 @@
 """LFE derivation, front/rear auto-balance, and final normalisation."""
 import numpy as np
 
-from .dsp import db_to_lin, lowpass, mono, rms
+from .dsp import db_to_lin, highpass, lowpass, mono, rms
 from .layouts import FRONT_SET, REAR_SET, LAYOUTS
+
+
+# The LFE channel is REPRODUCED +10 dB louder than the mains (ITU-R BR.1384; AVRs
+# and the Dolby Atmos renderer both apply it), so it must be RECORDED 10 dB lower
+# or it plays back far too hot. On top of that the bass is already full-range in
+# the mains and bass management feeds the sub from those, so a loud LFE doubles
+# the low end. So bake the -10 dB reproduction offset into the written LFE.
+LFE_REPRO_OFFSET_DB = -10.0
 
 
 def build_lfe(stems, cross, sr, gain_db=-3.0):
     """LFE from the real low end of BASS + kick (drums low band), not a
-    low-pass of the whole mix - keeps it tight instead of muddy."""
+    low-pass of the whole mix - keeps it tight instead of muddy. The written
+    level carries the -10 dB LFE reproduction offset (see above)."""
     n = max(len(s) for s in stems.values())
     acc = np.zeros(n, dtype=np.float32)
     if "bass" in stems:
@@ -22,7 +31,8 @@ def build_lfe(stems, cross, sr, gain_db=-3.0):
             m = mono(st)
             acc[:len(m)] += m / max(1, len(stems))
     low = lowpass(acc, cross, sr)
-    return (low * db_to_lin(gain_db)).astype(np.float32)
+    low = highpass(low, 20.0, sr)          # drop infrasonic mess below 20 Hz
+    return (low * db_to_lin(gain_db + LFE_REPRO_OFFSET_DB)).astype(np.float32)
 
 
 def auto_balance(chans, rear_below_front, rear_gain=0.0):
