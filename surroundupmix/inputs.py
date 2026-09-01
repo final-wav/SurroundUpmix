@@ -16,9 +16,15 @@ def _has_stem(d, stem):
 
 
 def looks_like_stems(d):
-    """A folder that directly contains a vocals stem plus at least one more."""
-    return _has_stem(d, "vocals") and (
-        _has_stem(d, "bass") or _has_stem(d, "drums") or _has_stem(d, "other"))
+    """A folder that directly contains a vocals stem plus at least one more -
+    either by tidy Demucs names, or by descriptive filenames (e.g. '... Drums
+    Left.wav') recognised by the instrument word."""
+    if _has_stem(d, "vocals") and (
+            _has_stem(d, "bass") or _has_stem(d, "drums") or _has_stem(d, "other")):
+        return True
+    from .stemnames import folder_stem_map
+    m = folder_stem_map(d)
+    return "vocals" in m and ("bass" in m or "drums" in m or "other" in m)
 
 
 def expand_inputs(paths):

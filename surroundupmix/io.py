@@ -55,27 +55,53 @@ def load(path):
     return Stereo(data, sr)
 
 
+def _load_stems_by_name(folder):
+    """Fallback for descriptive filenames (e.g. '... Drums Left.wav'): match the
+    instrument word in each name, pairing Left/Right mono files into one stereo
+    stem. Returns {canonical: Stereo}."""
+    from .stemnames import folder_stem_map
+    found = {}
+    for canon, items in folder_stem_map(folder).items():
+        full = [p for c, p in items if c is None]
+        left = [p for c, p in items if c == "L"]
+        right = [p for c, p in items if c == "R"]
+        if full:
+            found[canon] = load(full[0])
+        elif left and right:
+            sl, sr_ = load(left[0]), load(right[0])
+            k = min(len(sl), len(sr_))
+            found[canon] = Stereo(np.stack([sl.L[:k], sr_.L[:k]], axis=1), sl.sr)
+        elif left:
+            found[canon] = load(left[0])
+        elif right:
+            found[canon] = load(right[0])
+    return found
+
+
 def load_stems(folder):
     """Return {name: Stereo} for every stem present, plus the common sr.
     Raises if stems disagree on sample rate. Lengths are padded to the max.
+
+    Stems are found by the tidy Demucs names (bass.flac, ...) first; if none are
+    present, descriptive filenames like '... Drums Left.wav' are parsed instead.
     """
     found = {}
-    sr = None
     for name in STEM_NAMES:
         p = find_stem(folder, name)
-        if not p:
-            continue
-        s = load(p)
-        if sr is None:
-            sr = s.sr
-        elif s.sr != sr:
-            raise ValueError(
-                "stem '%s' is %d Hz but others are %d Hz" % (name, s.sr, sr))
-        found[name] = s
+        if p:
+            found[name] = load(p)
     if not found:
-        raise ValueError("no stems found in %r (need bass/drums/vocals/other)" % folder)
+        found = _load_stems_by_name(folder)
+    if not found:
+        raise ValueError("no stems found in %r (need bass/drums/vocals/other as "
+                         ".flac/.wav, or filenames naming the instrument)" % folder)
+
+    srs = {s.sr for s in found.values()}
+    if len(srs) > 1:
+        raise ValueError("stems disagree on sample rate: %s" % sorted(srs))
+    sr = srs.pop()
     n = max(len(s) for s in found.values())
-    for name, s in found.items():
+    for name, s in list(found.items()):
         if len(s) < n:
             pad = np.zeros((n - len(s), 2), dtype=np.float32)
             found[name] = Stereo(np.concatenate([s.data, pad], axis=0), sr)

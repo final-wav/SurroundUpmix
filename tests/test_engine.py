@@ -506,6 +506,44 @@ def test_binaural_detects_itd_not_panpot():
     assert -1.0 <= bina["rear_bias"] <= 1.0
 
 
+def test_parse_descriptive_stem_names():
+    from surroundupmix.stemnames import parse_stem_filename as p
+    assert p("01-Olivia Rodrigo - deja vu Drums Left.wav") == ("drums", "L")
+    assert p("01-Olivia Rodrigo - deja vu Drums Right.wav") == ("drums", "R")
+    assert p("Artist - Song Bass.flac")[0] == "bass"
+    assert p("Artist - Song Lead Vocals.flac")[0] == "vocals"
+    assert p("Artist - Song Backing Vocals.flac")[0] == "backing"
+    assert p("Artist - Song Other.flac")[0] == "other"
+    # instrument word in the TITLE, role trails -> the trailing role wins
+    assert p("All About That Bass - Drums.flac")[0] == "drums"
+    assert p("just some random file.wav")[0] is None
+
+
+def test_load_stems_from_descriptive_folder():
+    import tempfile
+    from surroundupmix.io import load_stems
+    from surroundupmix.inputs import looks_like_stems
+    d = tempfile.mkdtemp()
+    n = SR
+    t = np.arange(n) / SR
+    dl = (0.2 * np.sin(2 * np.pi * 200 * t)).astype("float32")   # drums left
+    dr = (0.2 * np.sin(2 * np.pi * 900 * t)).astype("float32")   # drums right (different)
+    sf.write(os.path.join(d, "X - deja vu Drums Left.wav"), dl, SR)
+    sf.write(os.path.join(d, "X - deja vu Drums Right.wav"), dr, SR)
+    sf.write(os.path.join(d, "X - deja vu Bass.wav"),
+             (0.2 * np.sin(2 * np.pi * 60 * t)).astype("float32"), SR)
+    sf.write(os.path.join(d, "X - deja vu Vocals.wav"),
+             (0.2 * np.sin(2 * np.pi * 300 * t)).astype("float32"), SR)
+
+    assert looks_like_stems(d)
+    found, sr = load_stems(d)
+    assert sr == SR
+    assert {"drums", "bass", "vocals"} <= set(found)
+    # the Left/Right pair became one stereo drums stem with distinct channels
+    dr_stem = found["drums"]
+    assert _rms(dr_stem.L - dr_stem.R) > 1e-3
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
