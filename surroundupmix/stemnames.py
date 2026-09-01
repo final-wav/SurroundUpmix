@@ -19,7 +19,9 @@ RIGHTMOST wins; and 'backing vocals' is resolved to backing before a plain
 import os
 import re
 
-AUDIO_EXTS = (".flac", ".wav")
+# stem files may be lossy too; the instrument-word requirement (below) keeps a
+# folder of ordinary songs from being mistaken for stems
+AUDIO_EXTS = (".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma")
 
 # canonical -> keyword patterns (word-boundary). Order only matters for 'backing',
 # which is checked first so "backing vocals" doesn't read as "vocals".

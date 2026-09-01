@@ -51,7 +51,15 @@ def find_stem(folder, name):
 
 
 def load(path):
-    data, sr = sf.read(path, dtype="float32", always_2d=True)
+    """Load an audio file as a Stereo. Uses soundfile (flac/wav/ogg/mp3 on new
+    libsndfile); falls back to torchaudio for what it can't read (m4a/aac, and
+    mp3 on older libsndfile) so stem files in those formats still work."""
+    try:
+        data, sr = sf.read(path, dtype="float32", always_2d=True)
+    except Exception:
+        import torchaudio
+        wav, sr = torchaudio.load(path)
+        data = wav.t().numpy().astype("float32")
     return Stereo(data, sr)
 
 

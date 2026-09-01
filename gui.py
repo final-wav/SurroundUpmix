@@ -304,6 +304,11 @@ class App:
                     font=("Segoe UI", 10, "bold"), anchor="w")
         s.map("Link.TButton", background=[("active", PANEL)],
               foreground=[("active", ACCENT)])
+        s.configure("TNotebook", background=BG, borderwidth=0, tabmargins=(2, 4, 2, 0))
+        s.configure("TNotebook.Tab", background=PANEL, foreground=MUTED,
+                    padding=(18, 7), borderwidth=0)
+        s.map("TNotebook.Tab", background=[("selected", CARD)],
+              foreground=[("selected", FG)])
 
     # ------------------------------------------------------------ layout
     def _build(self):
@@ -345,52 +350,91 @@ class App:
         if c is not None:
             c.yview_scroll(int(-event.delta / 120), "units")
 
-    # ---- input / queue
+    # ---- input: two tabs (Songs / Stems), each its own queue
     def _build_input(self, body):
-        ic = ttk.Labelframe(body, text="  INPUT  ", style="Card.TLabelframe",
-                            padding=12)
-        ic.pack(fill="both", expand=True, pady=(0, 10))
-        bar = ttk.Frame(ic)
+        self.jobs, self.sjobs = {}, {}          # songs queue, stems queue
+        self.tabs = ttk.Notebook(body)
+        self.tabs.pack(fill="both", expand=True, pady=(0, 10))
+        self.songs_tab = self._build_queue_tab(songs=True)
+        self.stems_tab = self._build_queue_tab(songs=False)
+        self.tabs.bind("<<NotebookTabChanged>>", lambda e: self._update_context())
+        if HAVE_DND:                             # a drop on the window goes to Songs
+            self.root.drop_target_register(DND_FILES)
+            self.root.dnd_bind("<<Drop>>", self._on_drop)
+
+    def _build_queue_tab(self, songs):
+        page = ttk.Frame(self.tabs, style="Bg.TFrame", padding=12)
+        self.tabs.add(page, text="  Songs  " if songs else "  Stems  ")
+        bar = ttk.Frame(page, style="Bg.TFrame")
         bar.pack(fill="x", pady=(0, 8))
-        ttk.Button(bar, text="＋ Add files…", style="Ghost.TButton",
-                   command=self._add_files).pack(side="left")
-        ttk.Button(bar, text="＋ Add folder…", style="Ghost.TButton",
-                   command=self._add_folder).pack(side="left", padx=(8, 0))
-        b = ttk.Button(bar, text="📁", style="Icon.TButton", command=self._open_input)
-        b.pack(side="left", padx=(8, 0))
-        ToolTip(b, "Open the folder of the selected (or first) input in Explorer")
+        if songs:
+            ttk.Button(bar, text="＋ Add files…", style="Ghost.TButton",
+                       command=self._add_files).pack(side="left")
+            ttk.Button(bar, text="＋ Add folder…", style="Ghost.TButton",
+                       command=self._add_folder).pack(side="left", padx=(8, 0))
+        else:
+            ttk.Button(bar, text="＋ Add stems folder…", style="Ghost.TButton",
+                       command=self._add_stems_folder).pack(side="left")
+        ob = ttk.Button(bar, text="📁", style="Icon.TButton", command=self._open_input)
+        ob.pack(side="left", padx=(8, 0))
+        ToolTip(ob, "Open the selected item's folder in Explorer")
         ttk.Button(bar, text="Remove", style="Ghost.TButton",
                    command=self._remove_sel).pack(side="left", padx=(16, 0))
         ttk.Button(bar, text="Clear", style="Ghost.TButton",
                    command=self._clear_queue).pack(side="left", padx=(8, 0))
-        hint = ("drag songs or folders here" if HAVE_DND
-                else "tip: pip install tkinterdnd2  for drag & drop")
+        if not HAVE_DND:
+            hint = "tip: pip install tkinterdnd2  for drag & drop"
+        elif songs:
+            hint = "drag songs or folders here"
+        else:
+            hint = "drag a stems folder here  (one folder = one song's stems)"
         ttk.Label(bar, text=hint, style="Muted.TLabel").pack(side="right")
 
-        tw = ttk.Frame(ic)
+        tw = ttk.Frame(page, style="Bg.TFrame")
         tw.pack(fill="both", expand=True)
-        self.tree = ttk.Treeview(tw, style="Queue.Treeview", show="headings",
-                                 columns=("name", "kind", "status"), height=6,
-                                 selectmode="extended")
-        self.tree.heading("name", text="File", anchor="w")
-        self.tree.heading("kind", text="Type", anchor="w")
-        self.tree.heading("status", text="Status", anchor="w")
-        self.tree.column("name", anchor="w", width=380)
-        self.tree.column("kind", anchor="w", width=90, stretch=False)
-        self.tree.column("status", anchor="w", width=140, stretch=False)
-        self.tree.tag_configure("queued", foreground=MUTED)
-        self.tree.tag_configure("running", foreground=ACCENT)
-        self.tree.tag_configure("done", foreground=OK)
-        self.tree.tag_configure("failed", foreground=STOP)
-        self.tree.pack(side="left", fill="both", expand=True)
-        tsb = ttk.Scrollbar(tw, command=self.tree.yview)
-        tsb.pack(side="right", fill="y")
-        self.tree.configure(yscrollcommand=tsb.set)
-
+        col1 = "kind" if songs else "instr"
+        tree = ttk.Treeview(tw, style="Queue.Treeview", show="headings",
+                            columns=("name", col1, "status"), height=6,
+                            selectmode="extended")
+        tree.heading("name", text="File" if songs else "Stems folder", anchor="w")
+        tree.heading(col1, text="Type" if songs else "Instruments", anchor="w")
+        tree.heading("status", text="Status", anchor="w")
+        tree.column("name", anchor="w", width=330)
+        tree.column(col1, anchor="w", width=170, stretch=False)
+        tree.column("status", anchor="w", width=120, stretch=False)
+        for tg, col in (("queued", MUTED), ("running", ACCENT),
+                        ("done", OK), ("failed", STOP)):
+            tree.tag_configure(tg, foreground=col)
+        tree.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(tw, command=tree.yview)
+        sb.pack(side="right", fill="y")
+        tree.configure(yscrollcommand=sb.set)
+        if songs:
+            self.tree = tree
+        else:
+            self.stree = tree
         if HAVE_DND:
-            for w in (self.root, self.tree):
-                w.drop_target_register(DND_FILES)
-                w.dnd_bind("<<Drop>>", self._on_drop)
+            tree.drop_target_register(DND_FILES)
+            tree.dnd_bind("<<Drop>>", self._on_drop if songs else self._on_drop_stems)
+        return page
+
+    def _active(self):
+        """(tree, jobs_dict, kind) for the tab the user is on."""
+        try:
+            if self.tabs.select() == str(self.stems_tab):
+                return self.stree, self.sjobs, "stems"
+        except Exception:
+            pass
+        return self.tree, self.jobs, "song"
+
+    def _detect_instr_text(self, folder):
+        from surroundupmix.stemnames import folder_stem_map
+        from surroundupmix.io import find_stem
+        det = [nm for nm in INSTRUMENTS if find_stem(folder, nm)]
+        for nm in folder_stem_map(folder):
+            if nm not in det:
+                det.append(nm)
+        return ", ".join(det)
 
     # ---- output / the everyday choices
     def _build_output(self, body):
@@ -662,40 +706,36 @@ class App:
             pass
 
     def _target_instruments(self):
-        """The stems the current queue + model/split will actually produce."""
-        kinds = {j["kind"] for j in self.jobs.values()}
-        have_song = "song" in kinds
-        have_stems = "stems" in kinds
+        """The stems the ACTIVE tab will produce (drives the greying)."""
+        tree, jd, kind = self._active()
         det = set()
-        if have_stems:
+        if kind == "stems":
             from surroundupmix.stemnames import folder_stem_map
             from surroundupmix.io import find_stem
-            for j in self.jobs.values():
-                if j["kind"] != "stems":
-                    continue
+            for j in jd.values():
                 for nm in INSTRUMENTS:
                     if find_stem(j["path"], nm):
                         det.add(nm)
                 det |= set(folder_stem_map(j["path"]).keys())
-        model_set = {"bass", "drums", "vocals", "other"}
-        if self.model.get() == "htdemucs_6s":
-            model_set |= {"guitar", "piano"}
-        if self.split.get() != "off":
-            model_set.add("backing")
-        if have_song or not self.jobs:
-            det |= model_set
-        return det, have_song, have_stems
+            if not jd:                       # empty stems tab: let all rows be set
+                det |= set(INSTRUMENTS)
+        else:
+            det |= {"bass", "drums", "vocals", "other"}
+            if self.model.get() == "htdemucs_6s":
+                det |= {"guitar", "piano"}
+            if self.split.get() != "off":
+                det.add("backing")
+        return det, (kind == "song")
 
     def _update_context(self):
-        """Grey the song-only controls for a stems-only queue, and grey the
-        per-instrument rows that won't exist for what's queued."""
+        """Grey the song-only controls on the Stems tab, and grey the
+        per-instrument rows that won't exist for the active tab."""
         try:
-            det, have_song, _ = self._target_instruments()
+            det, is_song = self._target_instruments()
         except Exception:
             return
-        song_ctl_on = have_song or not self.jobs
-        self._set_enabled(self._model_box, song_ctl_on)
-        self._set_enabled(self._device_box, song_ctl_on)
+        self._set_enabled(self._model_box, is_song)
+        self._set_enabled(self._device_box, is_song)
         for stem, widgets in getattr(self, "_instr_widgets", {}).items():
             on = stem in det
             for wdg in widgets:
@@ -746,11 +786,12 @@ class App:
                 self._append("! could not open %s\n" % path)
 
     def _open_input(self):
-        sel = self.tree.selection() or self.tree.get_children()
+        tree, jd, _ = self._active()
+        sel = tree.selection() or tree.get_children()
         if not sel:
-            self._append("! no input to open (add a file/folder first)\n")
+            self._append("! nothing to open (add something first)\n")
             return
-        p = self.jobs.get(sel[0], {}).get("path", "")
+        p = jd.get(sel[0], {}).get("path", "")
         self._open_folder(p if os.path.isdir(p) else os.path.dirname(p))
 
     def _open_output(self):
@@ -759,24 +800,41 @@ class App:
             self._open_folder(od)
         else:
             self._append("! output folder is blank (files go into an 'Output' folder "
-                         "folder next to each song)\n")
+                         "next to each song)\n")
+
+    def _refresh_counts(self):
+        n = len(self.jobs) + len(self.sjobs)
+        self.status.set(("%d in queue" % n) if n else "Ready")
+        self._update_context()
 
     # ------------------------------------------------------------ queue ops
     def _add_paths(self, paths):
-        jobs = expand_inputs(paths)
+        """Songs-tab / window drop: auto-classify and file each job under its
+        own tab (a stems folder lands in Stems even if dropped on Songs)."""
         added = 0
-        for path, kind in jobs:
-            if any(j["path"] == path for j in self.jobs.values()):
+        for path, kind in expand_inputs(paths):
+            tree, jd = (self.stree, self.sjobs) if kind == "stems" else (self.tree, self.jobs)
+            if any(j["path"] == path for j in jd.values()):
                 continue
-            iid = self.tree.insert("", "end", tags=("queued",),
-                                   values=(os.path.basename(path.rstrip(os.sep)),
-                                           kind, "⏳ queued"))
-            self.jobs[iid] = {"path": path, "kind": kind}
+            col1 = self._detect_instr_text(path) if kind == "stems" else kind
+            iid = tree.insert("", "end", tags=("queued",),
+                              values=(os.path.basename(path.rstrip(os.sep)),
+                                      col1 or "?", "⏳ queued"))
+            jd[iid] = {"path": path, "kind": kind}
             added += 1
-        self.status.set("%d in queue" % len(self.jobs))
-        self._update_context()
+        self._refresh_counts()
         if added == 0 and paths:
             self._append("! nothing addable in that drop/selection\n")
+
+    def _add_one_stems_folder(self, folder):
+        if not folder or any(j["path"] == folder for j in self.sjobs.values()):
+            return
+        instr = self._detect_instr_text(folder)
+        iid = self.stree.insert("", "end", tags=("queued",),
+                                values=(os.path.basename(folder.rstrip(os.sep)),
+                                        instr or "?", "⏳ queued"))
+        self.sjobs[iid] = {"path": folder, "kind": "stems"}
+        self._refresh_counts()
 
     def _add_files(self):
         ps = filedialog.askopenfilenames(
@@ -791,6 +849,11 @@ class App:
         if p:
             self._add_paths([p])
 
+    def _add_stems_folder(self):
+        p = filedialog.askdirectory(title="Choose a folder of stems (one song)")
+        if p:
+            self._add_one_stems_folder(p)
+
     def _browse_out(self):
         p = filedialog.askdirectory(title="Choose an output folder")
         if p:
@@ -803,23 +866,35 @@ class App:
             paths = [event.data]
         self._add_paths(paths)
 
+    def _on_drop_stems(self, event):
+        try:
+            paths = list(self.root.tk.splitlist(event.data))
+        except Exception:
+            paths = [event.data]
+        seen = set()
+        for p in paths:                          # a folder (or a file's folder) = one job
+            folder = p if os.path.isdir(p) else os.path.dirname(p)
+            if folder and folder not in seen:
+                seen.add(folder)
+                self._add_one_stems_folder(folder)
+
     def _remove_sel(self):
         if self.running:
             return
-        for iid in self.tree.selection():
-            self.tree.delete(iid)
-            self.jobs.pop(iid, None)
-        self.status.set("%d in queue" % len(self.jobs))
-        self._update_context()
+        tree, jd, _ = self._active()
+        for iid in tree.selection():
+            tree.delete(iid)
+            jd.pop(iid, None)
+        self._refresh_counts()
 
     def _clear_queue(self):
         if self.running:
             return
-        for iid in list(self.jobs):
-            self.tree.delete(iid)
-        self.jobs.clear()
-        self.status.set("Ready")
-        self._update_context()
+        tree, jd, _ = self._active()
+        for iid in list(jd):
+            tree.delete(iid)
+        jd.clear()
+        self._refresh_counts()
 
     # ------------------------------------------------------------ per-instrument
     def _overrides_dict(self):
@@ -921,11 +996,14 @@ class App:
             return
         self._save_cfg()
         self._write_overrides()
-        pending = [iid for iid in self.tree.get_children()
-                   if self.tree.set(iid, "status").endswith("queued")
-                   or self.tree.set(iid, "status").endswith("failed")]
+        tree, jd, kind = self._active()
+        self._run_tree, self._run_jobs = tree, jd
+        pending = [iid for iid in tree.get_children()
+                   if tree.set(iid, "status").endswith("queued")
+                   or tree.set(iid, "status").endswith("failed")]
         if not pending:
-            self._append("! queue is empty (add songs or a folder first)\n")
+            self._append("! this tab's queue is empty (add %s first)\n"
+                         % ("stems folders" if kind == "stems" else "songs"))
             return
         self.running = True
         self.stop_flag = False
@@ -940,7 +1018,7 @@ class App:
         for i, iid in enumerate(pending, 1):
             if self.stop_flag:
                 break
-            job = self.jobs.get(iid)
+            job = self._run_jobs.get(iid)
             if not job:
                 continue
             self.q.put(("status", iid, "running"))
@@ -999,9 +1077,10 @@ class App:
                     self.status.set(item[1])
                 elif tag == "status":
                     _, iid, state = item
-                    if self.tree.exists(iid):
-                        self.tree.set(iid, "status", self._STATUS_TEXT[state])
-                        self.tree.item(iid, tags=(state,))
+                    tree = getattr(self, "_run_tree", self.tree)
+                    if tree.exists(iid):
+                        tree.set(iid, "status", self._STATUS_TEXT[state])
+                        tree.item(iid, tags=(state,))
                 elif tag == "done_all":
                     _, done, total = item
                     self.running = False
