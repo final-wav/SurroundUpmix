@@ -45,7 +45,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
                  lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
-                 overrides=None,
+                 overrides=None, split_vocals="off", split_python=None,
                  adm=False, adm_bits=24, adm_order="playback", original=None,
                  decorrelate=True, vocal_roles="auto", recover_detail=True,
                  recover_gain=0.0, binaural_amount=0.0, verbose=True):
@@ -61,6 +61,12 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     from .overrides import normalize as _norm_ov, zones as _ov_zones
     ov = _norm_ov(overrides)
     place = {**(place or {}), **_ov_zones(ov)}   # overrides' zones win over --place
+    # lead/backing split for the stems path (allinone splits on disk already, so
+    # a 'backing' stem is present there and this is a no-op)
+    if split_vocals != "off":
+        from .split import maybe_split_vocals
+        stems = maybe_split_vocals(stems, sr, split_vocals, split_python,
+                                   lambda m: _log(verbose, m))
     p = _presets.get(preset)
     if rear_below_front is not None:
         p["rear_below_front"] = rear_below_front

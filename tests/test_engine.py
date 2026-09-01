@@ -617,6 +617,22 @@ def test_per_instrument_spread_center_lfe():
     assert _rms(lfe_none) < 0.1 * _rms(lfe_full)
 
 
+def test_split_vocals_noop_paths():
+    from surroundupmix.split import maybe_split_vocals
+    base = {"vocals": Stereo(np.zeros((SR, 2), "float32"), SR),
+            "other": Stereo(np.zeros((SR, 2), "float32"), SR)}
+    # off -> untouched
+    assert "backing" not in maybe_split_vocals(dict(base), SR, mode="off")
+    # already split (backing present) -> no-op
+    s2 = dict(base); s2["backing"] = Stereo(np.zeros((SR, 2), "float32"), SR)
+    out2 = maybe_split_vocals(s2, SR, mode="on")
+    assert set(out2) == {"vocals", "other", "backing"}
+    # splitter unavailable -> graceful no-op, no crash
+    out3 = maybe_split_vocals(dict(base), SR, mode="auto",
+                              split_python=os.path.join("no", "such", "python"))
+    assert "backing" not in out3
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

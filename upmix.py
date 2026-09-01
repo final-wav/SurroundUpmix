@@ -65,6 +65,12 @@ def main(argv=None):
     ap.add_argument("--overrides", default=None, metavar="FILE.json",
                     help="per-instrument settings (zone/level/mute/...) as JSON; "
                          "sits on top of the preset. See surroundupmix/overrides.py")
+    ap.add_argument("--split-vocals", default="off", choices=["auto", "on", "off"],
+                    help="split the vocals stem into lead + backing (Roformer "
+                         "karaoke) before upmixing; auto/on need the splitter venv")
+    ap.add_argument("--split-python", default=None,
+                    help="interpreter with audio-separator (the splitter venv); "
+                         "auto-detected from bin/splitter_venv if omitted")
     _place_stems = ("vocals", "bass", "drums", "other", "guitar", "piano")
     for stem in _place_stems:
         ap.add_argument("--place-%s" % stem, default="auto",
@@ -81,6 +87,7 @@ def main(argv=None):
         out = upmix_folder(
             args.stems_folder, fmt=args.format, preset=args.preset,
             out_dir=args.out_dir, track_label=args.track_label, overrides=overrides,
+            split_vocals=args.split_vocals, split_python=args.split_python,
             rear_gain=args.rear_gain, rear_below_front=args.rear_below_front,
             vocal_mode=args.vocal_mode, backing_gain=args.backing_gain,
             lfe_cross=args.lfe_cross, norm_level=args.norm_level,

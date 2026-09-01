@@ -734,8 +734,12 @@ class App:
             det, is_song = self._target_instruments()
         except Exception:
             return
-        self._set_enabled(self._model_box, is_song)
-        self._set_enabled(self._device_box, is_song)
+        # model + device are song-only: hide them entirely on the Stems tab
+        for box in (self._model_box, self._device_box):
+            try:
+                box.master.grid() if is_song else box.master.grid_remove()
+            except Exception:
+                pass
         for stem, widgets in getattr(self, "_instr_widgets", {}).items():
             on = stem in det
             for wdg in widgets:
@@ -973,7 +977,8 @@ class App:
                    "--device", self.device.get(), "--model", self.model.get(),
                    "--split-vocals", self.split.get()] + common
         else:
-            cmd = [py, os.path.join(HERE, "upmix.py"), path] + common
+            cmd = [py, os.path.join(HERE, "upmix.py"), path,
+                   "--split-vocals", self.split.get()] + common
         rg = self.rear_gain.get().strip()
         if rg:
             cmd += ["--rear-gain", rg]
