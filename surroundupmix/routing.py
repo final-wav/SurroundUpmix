@@ -237,19 +237,22 @@ def _route_backing(chans, stems, p, backing_gain_db, ov=None):
     bg = backing_gain_db + ov.get("level", 0.0)
     bl, br = surround_pair(chans.fmt)
     heights = has_heights(chans.fmt)
-    # front anchor (divergence) + dry localisable choir behind
-    chans.add("FL", backing.L, bg - 9)
-    chans.add("FR", backing.R, bg - 9)
-    chans.add(bl, backing.L, bg)
-    chans.add(br, backing.R, bg)
+    # Backing is a DELIBERATE placement (you want the choir behind you), so it
+    # goes to the FORCED layer - the front/rear auto-balance trims only the
+    # automatic wrap, so it won't bury the backing in the rears. Without this the
+    # balance pulled the rears ~15 dB under the front and the backing vanished.
+    chans.add("FL", backing.L, bg - 9, forced=True)   # small front anchor
+    chans.add("FR", backing.R, bg - 9, forced=True)
+    chans.add(bl, backing.L, bg, forced=True)          # the choir, behind you
+    chans.add(br, backing.R, bg, forced=True)
     # blend bed: the full clean vocal, quiet, under the backing
     bed = stems.get("vocals_full")
     if bed is not None:
-        chans.add(bl, bed.L, bg - 10)
-        chans.add(br, bed.R, bg - 10)
+        chans.add(bl, bed.L, bg - 10, forced=True)
+        chans.add(br, bed.R, bg - 10, forced=True)
         if heights:
-            chans.add("TFL", highpass(bed.L, 3000, backing.sr), bg - 13)
-            chans.add("TFR", highpass(bed.R, 3000, backing.sr), bg - 13)
+            chans.add("TFL", highpass(bed.L, 3000, backing.sr), bg - 13, forced=True)
+            chans.add("TFR", highpass(bed.R, 3000, backing.sr), bg - 13, forced=True)
 
 
 def _route_forced(chans, name, direct, ambient, zone, p, sr):

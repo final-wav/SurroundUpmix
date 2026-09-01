@@ -633,6 +633,27 @@ def test_split_vocals_noop_paths():
     assert "backing" not in out3
 
 
+def test_backing_survives_autobalance():
+    # backing is a deliberate rear placement -> forced layer -> the front/rear
+    # auto-balance must NOT trim it away.
+    from surroundupmix.routing import spatialize
+    from surroundupmix.balance import auto_balance
+    n = SR
+    t = np.arange(n) / SR
+    rng = np.random.default_rng(1)
+    stems = {
+        "vocals": Stereo(np.stack([0.3 * np.sin(2 * np.pi * 220 * t)] * 2, 1).astype("float32"), SR),
+        "backing": Stereo(np.stack([0.2 * np.sin(2 * np.pi * 5000 * t)] * 2, 1).astype("float32"), SR),
+        "other": Stereo((rng.standard_normal((n, 2)) * 0.1).astype("float32"), SR),
+    }
+    ch = spatialize(stems, "7.1", _presets.get("immersive"), SR, backing_gain_db=-3.0)
+    before = _rms(ch.forced["BL"])
+    auto_balance(ch, 15)
+    after = _rms(ch.forced["BL"])
+    assert before > 1e-4
+    assert abs(20 * np.log10((after + 1e-12) / (before + 1e-12))) < 0.1
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
