@@ -13,6 +13,9 @@ import shutil
 import subprocess
 import sys
 
+# Suppress unauthenticated HF Hub warning (processing is 100% local)
+os.environ["HF_HUB_VERBOSITY"] = "error"
+
 from surroundupmix.engine import upmix_folder
 from surroundupmix.presets import PRESETS, DEFAULT_PRESET
 
@@ -127,6 +130,12 @@ def main(argv=None):
                     help="ADM bed order: playback = rears at 5/6 (correct on the "
                          "speaker rig); renderer = Dolby order, sides at 5/6 "
                          "(correct when imported into the Dolby Atmos Renderer)")
+    ap.add_argument("--adm-objects", action="store_true",
+                    help="export split-out backing vocals as discrete 3D Atmos objects "
+                         "instead of folding them into the 7.1.2 bed")
+    ap.add_argument("--all-objects", action="store_true",
+                    help="write modern 20-channel All-Objects Dolby Atmos master "
+                         "(14 speaker anchors + 6 dynamic moving 3D objects, 0 bed channels)")
     ap.add_argument("--overrides", default=None, metavar="FILE.json",
                     help="per-instrument settings (zone/level/mute/...) as JSON; "
                          "sits on top of the preset. See surroundupmix/overrides.py")
@@ -162,9 +171,18 @@ def main(argv=None):
     if args.device != "auto":
         dargs += ["-d", args.device]
     dargs += [song]
-    if run(dargs).returncode != 0:
-        print("ERROR: Demucs failed.", file=sys.stderr)
-        return 1
+    res = run(dargs)
+    if res.returncode != 0:
+        if args.device in ("cuda", "auto"):
+            print("\nWARNING: Demucs failed on GPU (possible CUDA OOM / device error).")
+            print("Retrying separation on CPU fallback...\n")
+            dargs_cpu = demucs + ["-n", args.model, "--flac", "-o", sep, "-d", "cpu", song]
+            if run(dargs_cpu).returncode != 0:
+                print("ERROR: Demucs failed on CPU as well.", file=sys.stderr)
+                return 1
+        else:
+            print("ERROR: Demucs failed.", file=sys.stderr)
+            return 1
 
     stems_dir = find_stems_dir(sep, args.model, track)
     vocals = os.path.join(stems_dir, "vocals.flac")
@@ -200,8 +218,9 @@ def main(argv=None):
         track_label=track, overrides=overrides, rear_gain=args.rear_gain,
         rear_below_front=args.rear_below_front, vocal_mode=args.vocal_mode,
         backing_gain=args.backing_gain, force_wav=args.wav, place=place,
-        adm=args.adm, adm_order=args.adm_order, original=song,
-        decorrelate=(args.decorrelate == "on"), vocal_roles=args.vocal_roles,
+        adm=args.adm, adm_order=args.adm_order, adm_objects=args.adm_objects,
+        adm_all_objects=args.all_objects,
+        original=song, decorrelate=(args.decorrelate == "on"), vocal_roles=args.vocal_roles,
         recover_detail=(args.recover_detail == "on"),
         binaural_amount=max(0.0, min(1.0, args.binaural / 100.0)))
 

@@ -3,6 +3,7 @@
 # Splits a vocal stem into LEAD + BACKING using a Mel-Band Roformer karaoke model.
 # Renames the outputs to lead.flac / backing.flac. Prints "LEAD <path>" and "BACKING <path>".
 import sys, os, glob, shutil
+os.environ["HF_HUB_VERBOSITY"] = "error"
 from audio_separator.separator import Separator
 
 MODEL = 'mel_band_roformer_karaoke_aufr33_viperx_sdr_10.1956.ckpt'

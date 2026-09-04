@@ -157,11 +157,93 @@ def _write_wav_extensible(path, interleaved, sr, mask, bits=24):
         f.write(pad)
 
 
-def write_surround(path_no_ext, channels, fmt, sr, bits=24, force_wav=False):
+def copy_metadata(src_path, dst_path):
+    """Copy audio tags (artist, title, album, etc.) and embedded album art
+    from src_path to dst_path using mutagen. Fails gracefully if mutagen is
+    absent or tags cannot be transferred."""
+    if not src_path or not os.path.isfile(src_path) or not dst_path or not os.path.isfile(dst_path):
+        return False
+    try:
+        import mutagen
+    except ImportError:
+        return False
+
+    try:
+        dst_ext = os.path.splitext(dst_path)[1].lower()
+        if dst_ext == ".flac":
+            from mutagen.flac import FLAC, Picture
+            dst = FLAC(dst_path)
+            src_ext = os.path.splitext(src_path)[1].lower()
+            if src_ext == ".flac":
+                src = FLAC(src_path)
+                for k, v in src.items():
+                    dst[k] = v
+                for pic in src.pictures:
+                    dst.add_picture(pic)
+                dst.save()
+                return True
+            else:
+                # MP3, M4A, etc.
+                src_f = mutagen.File(src_path)
+                if src_f is None:
+                    return False
+                try:
+                    easy_src = mutagen.File(src_path, easy=True)
+                    if easy_src:
+                        for k, v in easy_src.items():
+                            try:
+                                dst[k] = v
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
+
+                # extract pictures
+                if hasattr(src_f, "tags") and src_f.tags:
+                    # ID3 APIC
+                    for tag_val in src_f.tags.values():
+                        if tag_val.__class__.__name__ == "APIC":
+                            p = Picture()
+                            p.data = tag_val.data
+                            p.type = tag_val.type
+                            p.mime = tag_val.mime
+                            p.desc = tag_val.desc
+                            dst.add_picture(p)
+                            break
+                    # MP4 covr
+                    if "covr" in src_f.tags:
+                        for covr in src_f.tags["covr"]:
+                            p = Picture()
+                            p.data = bytes(covr)
+                            p.type = 3
+                            p.mime = "image/png" if getattr(covr, "imageformat", None) == 14 else "image/jpeg"
+                            dst.add_picture(p)
+                            break
+                dst.save()
+                return True
+        elif dst_ext == ".wav":
+            try:
+                from mutagen.wave import WAVE
+                from mutagen.id3 import ID3
+                src_f = mutagen.File(src_path)
+                if src_f and hasattr(src_f, "tags") and isinstance(src_f.tags, ID3):
+                    dst = WAVE(dst_path)
+                    dst.tags = src_f.tags
+                    dst.save()
+                    return True
+            except Exception:
+                pass
+    except Exception:
+        return False
+    return False
+
+
+def write_surround(path_no_ext, channels, fmt, sr, bits=24, force_wav=False, original=None):
     """Write the surround file. `channels` is {name: mono np.array}; missing
     channels are written silent. Returns the actual output path.
 
     <=8 channels -> FLAC (unless force_wav); 7.1.2 -> WAV extensible.
+    Preserves tags and cover art from `original` if provided.
     """
     order = LAYOUTS[fmt]
     n = max((len(v) for v in channels.values() if v is not None), default=0)
@@ -183,4 +265,8 @@ def write_surround(path_no_ext, channels, fmt, sr, bits=24, force_wav=False):
         path = path_no_ext + ".flac"
         subtype = "PCM_24" if bits == 24 else "PCM_16"
         sf.write(path, interleaved, sr, subtype=subtype)
+
+    if original and os.path.isfile(original):
+        copy_metadata(original, path)
+
     return path

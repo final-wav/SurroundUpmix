@@ -64,11 +64,15 @@ def auto_balance(chans, rear_below_front, rear_gain=0.0):
     if rear_below_front <= 0:
         return {"applied": False}
     fe = sum(rms(chans.data[c]) ** 2 for c in LAYOUTS[chans.fmt] if c in FRONT_SET)
-    re = sum(rms(chans.data[c]) ** 2 for c in LAYOUTS[chans.fmt] if c in REAR_SET)
+    r_chans = [c for c in LAYOUTS[chans.fmt] if c in REAR_SET]
+    re = sum(rms(chans.data[c]) ** 2 for c in r_chans)
     if fe <= 1e-12 or re <= 1e-12:
         return {"applied": False}
+    # Normalize rear energy by speaker count relative to 7.1 (4 rear channels: BL, BR, SL, SR)
+    # so 5.1 (2 channels) isn't over-boosted and 7.1.2 (6 channels) isn't over-attenuated
+    scale = len(r_chans) / 4.0 if r_chans else 1.0
     front_db = 10.0 * np.log10(fe)
-    rear_db = 10.0 * np.log10(re)
+    rear_db = 10.0 * np.log10(re / scale)
     trim = (front_db - rear_below_front + rear_gain) - rear_db
     trim = float(max(-24.0, min(12.0, trim)))
     g = db_to_lin(trim)
@@ -78,10 +82,11 @@ def auto_balance(chans, rear_below_front, rear_gain=0.0):
     return {"applied": True, "front_db": front_db, "rear_db": rear_db, "trim": trim}
 
 
-def normalize(chans, peak_db=-0.1):
-    """Peak-normalise all channels together to `peak_db` dBFS (LFE included,
-    matching the old single 'gain -n' over the merged file). Peak is taken over
-    the full signal (automatic + forced) and both layers are scaled equally."""
+def normalize(chans, peak_db=-1.0):
+    """Peak-normalise all channels together to `peak_db` dBFS (default -1.0 dBFS
+    headroom for True-Peak safety on DACs and Atmos encoders; LFE included).
+    Peak is taken over the full signal (automatic + forced) and both layers are
+    scaled equally."""
     peak = 0.0
     for c in LAYOUTS[chans.fmt]:
         arr = chans.total(c)

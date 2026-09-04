@@ -223,11 +223,13 @@ def _route_residual(chans, stems, p, sr):
         chans.add("TFR", highpass(decorrelate(ambient.R, sr, 3), p["height_hp"], sr), rg - 8)
 
 
-def _route_backing(chans, stems, p, backing_gain_db, ov=None):
+def _route_backing(chans, stems, p, backing_gain_db, ov=None, discrete=False):
     """Backing vocals (from the karaoke split) are their OWN content, so they
     wrap the rears full-range with zero phase risk. A quiet front anchor keeps
     word transitions from jumping, and the full clean vocal is laid underneath
-    as a bed to mask the split's artifacts (the 'blend' idea, kept)."""
+    as a bed to mask the split's artifacts (the 'blend' idea, kept).
+    When discrete=True (Atmos objects mode), only the front anchor is routed to
+    the bed; the surround channels are left for discrete 3D object rendering."""
     backing = stems.get("backing")
     if backing is None:
         return
@@ -235,14 +237,16 @@ def _route_backing(chans, stems, p, backing_gain_db, ov=None):
     if ov.get("mute"):
         return
     bg = backing_gain_db + ov.get("level", 0.0)
+    chans.add("FL", backing.L, bg - 9, forced=True)   # small front anchor
+    chans.add("FR", backing.R, bg - 9, forced=True)
+    if discrete:
+        return
     bl, br = surround_pair(chans.fmt)
     heights = has_heights(chans.fmt)
     # Backing is a DELIBERATE placement (you want the choir behind you), so it
     # goes to the FORCED layer - the front/rear auto-balance trims only the
     # automatic wrap, so it won't bury the backing in the rears. Without this the
     # balance pulled the rears ~15 dB under the front and the backing vanished.
-    chans.add("FL", backing.L, bg - 9, forced=True)   # small front anchor
-    chans.add("FR", backing.R, bg - 9, forced=True)
     chans.add(bl, backing.L, bg, forced=True)          # the choir, behind you
     chans.add(br, backing.R, bg, forced=True)
     # blend bed: the full clean vocal, quiet, under the backing
@@ -281,11 +285,13 @@ def _route_forced(chans, name, direct, ambient, zone, p, sr):
 
 
 def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.0,
-               place=None, overrides=None):
+               place=None, overrides=None, discrete_backing=False):
     """Build the spatial channels (everything except the final LFE + balance).
     `place` is {stem: 'auto'|'front'|'side'|'rear'} of manual placement.
     `overrides` is {stem: {zone,level,mute,...}} of per-instrument settings that
-    sit on top of the preset. Returns a Channels object.
+    sit on top of the preset. `discrete_backing=True` routes backing vocals to
+    discrete Atmos objects rather than folding them into the bed surround channels.
+    Returns a Channels object.
     """
     n = max(len(s) for s in stems.values())
     chans = Channels(fmt, n)
@@ -321,6 +327,7 @@ def spatialize(stems, fmt, preset, sr, vocal_class="reverb", backing_gain_db=-6.
             _route_ambient(chans, name, ambient, direct, preset, sr,
                            keep_vocal_forward, wrap_db=wrap_db, no_wrap=no_wrap)
 
-    _route_backing(chans, stems, preset, backing_gain_db, overrides.get("backing", {}))
+    _route_backing(chans, stems, preset, backing_gain_db, overrides.get("backing", {}),
+                   discrete=discrete_backing)
     _route_residual(chans, stems, preset, sr)
     return chans

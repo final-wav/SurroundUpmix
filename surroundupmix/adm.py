@@ -57,6 +57,26 @@ BED_RENDERER = [
     ("TFR", "RC_Rtm", "RoomCentricRightTopMiddle",    1.0,  0.0,  1.0),
 ]
 
+# 14 Fixed Virtual Speaker Anchors for All-Object Dolby Atmos Master (7.1.6 layout)
+# (Channel name, Display name, X, Y, Z)
+ANCHORS_7_1_6 = [
+    ("FL",  "Front Left",           -1.0,  1.0, 0.0),
+    ("FR",  "Front Right",           1.0,  1.0, 0.0),
+    ("FC",  "Center",                0.0,  1.0, 0.0),
+    ("LFE", "LFE / Subwoofer",       0.0,  0.8, 0.0),
+    ("SL",  "Side Surround Left",   -1.0,  0.0, 0.0),
+    ("SR",  "Side Surround Right",   1.0,  0.0, 0.0),
+    ("BL",  "Rear Surround Left",   -1.0, -1.0, 0.0),
+    ("BR",  "Rear Surround Right",   1.0, -1.0, 0.0),
+    ("TFL", "Top Front Left",       -1.0,  1.0, 1.0),
+    ("TFR", "Top Front Right",       1.0,  1.0, 1.0),
+    ("TML", "Top Middle Left",      -1.0,  0.0, 1.0),
+    ("TMR", "Top Middle Right",      1.0,  0.0, 1.0),
+    ("TRL", "Top Rear Left",        -1.0, -1.0, 1.0),
+    ("TRR", "Top Rear Right",        1.0, -1.0, 1.0),
+]
+
+
 
 def _t(sec):
     """Seconds -> ADM time string HH:MM:SS.sssss."""
@@ -133,7 +153,7 @@ def make_dbmd(channel_count, creation0="Created with SurroundUpmix",
     return bytes(out)
 
 
-def _axml(n_frames, sr, bits, objects, program_name, bed=BED):
+def _axml(n_frames, sr, bits, objects, program_name, bed=BED, all_objects=False):
     total = _t(n_frames / float(sr))
     A = []
     A.append('<?xml version="1.0" encoding="utf-8"?>')
@@ -142,151 +162,224 @@ def _axml(n_frames, sr, bits, objects, program_name, bed=BED):
              'xsi:schemaLocation="urn:ebu:metadata-schema:ebuCore_2016 ebucore.xsd" '
              'lang="en"><coreMetadata><format><audioFormatExtended>')
 
-    # ---- audioProgramme ----
+    # ---- audioProgramme (strictly 1 in Dolby Atmos profile) ----
     A.append('<audioProgramme audioProgrammeID="APR_1001" audioProgrammeName="%s" '
              'start="%s" end="%s">' % (program_name, _t(0), total))
     A.append('<audioContentIDRef>ACO_1001</audioContentIDRef>')
-    if objects:
-        A.append('<audioContentIDRef>ACO_1002</audioContentIDRef>')
     A.append('</audioProgramme>')
 
-    # ---- audioContent: Bed ----
-    A.append('<audioContent audioContentID="ACO_1001" audioContentName="Bed">'
-             '<audioObjectIDRef>AO_1001</audioObjectIDRef>'
-             '<dialogue mixedContentKind="0">2</dialogue></audioContent>')
-    # ---- audioContent: Objects ----
-    if objects:
-        A.append('<audioContent audioContentID="ACO_1002" audioContentName="Objects">')
-        for i in range(len(objects)):
-            A.append('<audioObjectIDRef>AO_%04x</audioObjectIDRef>' % (0x100b + i))
+    if all_objects:
+        # All-Objects Mode: 0 bed channels, all tracks are interactive 3D Audio Objects
+        A.append('<audioContent audioContentID="ACO_1001" audioContentName="SurroundUpmix">')
+        for i in range(len(objects or [])):
+            A.append('<audioObjectIDRef>AO_%04X</audioObjectIDRef>' % (0x1001 + i))
         A.append('<dialogue mixedContentKind="0">2</dialogue></audioContent>')
 
-    # ---- audioObject: Bed ----
-    A.append('<audioObject audioObjectID="AO_1001" audioObjectName="Bed" '
-             'start="%s" duration="%s">' % (_t(0), total))
-    A.append('<audioPackFormatIDRef>AP_00011001</audioPackFormatIDRef>')
-    for k in range(10):
-        A.append('<audioTrackUIDRef>ATU_%08x</audioTrackUIDRef>' % (k + 1))
-    A.append('</audioObject>')
-    # ---- audioObject: each object ----
-    for i, ob in enumerate(objects or []):
-        uid = 11 + i
-        A.append('<audioObject audioObjectID="AO_%04x" audioObjectName="%s" '
-                 'start="%s" duration="%s">'
-                 % (0x100b + i, ob.get("name", "Audio Object %d" % (i + 1)),
-                    _t(0), total))
-        A.append('<audioPackFormatIDRef>AP_0003%04x</audioPackFormatIDRef>' % (0x1001 + i))
-        A.append('<audioTrackUIDRef>ATU_%08x</audioTrackUIDRef>' % uid)
+        # ---- audioObject: each object ----
+        for i, ob in enumerate(objects or []):
+            obj_id = 0x1001 + i
+            uid = 1 + i
+            A.append('<audioObject audioObjectID="AO_%04X" audioObjectName="%s" '
+                     'start="%s" duration="%s">'
+                     % (obj_id, ob.get("name", "Audio Object %d" % (i + 1)),
+                        _t(0), total))
+            A.append('<audioPackFormatIDRef>AP_0003%04X</audioPackFormatIDRef>' % (0x1001 + i))
+            A.append('<audioTrackUIDRef>ATU_%08X</audioTrackUIDRef>' % uid)
+            A.append('</audioObject>')
+
+        # ---- object audioPackFormats ----
+        for i, ob in enumerate(objects or []):
+            A.append('<audioPackFormat audioPackFormatID="AP_0003%04X" '
+                     'audioPackFormatName="%s" typeDefinition="Objects" typeLabel="0003">'
+                     '<audioChannelFormatIDRef>AC_0003%04X</audioChannelFormatIDRef>'
+                     '</audioPackFormat>' % (0x1001 + i, ob.get("name", "Obj_%d" % (i + 1)), 0x1001 + i))
+
+        # ---- object audioChannelFormats (with position automation) ----
+        for i, ob in enumerate(objects or []):
+            cid = 0x1001 + i
+            A.append('<audioChannelFormat audioChannelFormatID="AC_0003%04X" '
+                     'audioChannelFormatName="%s" typeDefinition="Objects" '
+                     'typeLabel="0003">' % (cid, ob.get("name", "Obj_%d" % (i + 1))))
+            blocks = ob.get("blocks")
+            if not blocks:
+                x = ob.get("x", 0.0)
+                y = ob.get("y", 1.0)
+                z = ob.get("z", 0.0)
+                blocks = [(0.0, n_frames / float(sr), x, y, z)]
+            for bi, (rt, dur, x, y, z) in enumerate(blocks):
+                A.append('<audioBlockFormat audioBlockFormatID="AB_0003%04X_%08X" '
+                         'rtime="%s" duration="%s">' % (cid, bi + 1, _t(rt), _t(dur)))
+                A.append('<cartesian>1</cartesian>')
+                A.append('<position coordinate="X">%.10f</position>' % x)
+                A.append('<position coordinate="Y">%.10f</position>' % y)
+                A.append('<position coordinate="Z">%.10f</position>' % z)
+                A.append('<jumpPosition>0</jumpPosition>')
+                A.append('</audioBlockFormat>')
+            A.append('</audioChannelFormat>')
+
+        # ---- audioStreamFormat + audioTrackFormat ----
+        for i in range(len(objects or [])):
+            hexid = "0003%04X" % (0x1001 + i)
+            s = ('<audioStreamFormat audioStreamFormatID="AS_%s" audioStreamFormatName="PCM_obj_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
+                 '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
+                 '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
+                 '</audioStreamFormat>' % (hexid, i + 1, hexid, hexid, hexid))
+            t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" audioTrackFormatName="PCM_obj_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
+                 '</audioTrackFormat>' % (hexid, i + 1, hexid))
+            A.append(s); A.append(t)
+
+        # ---- audioTrackUIDs ----
+        for i in range(len(objects or [])):
+            uid = 1 + i
+            A.append('<audioTrackUID UID="ATU_%08X" bitDepth="%d" sampleRate="%d">'
+                     '<audioTrackFormatIDRef>AT_0003%04X_01</audioTrackFormatIDRef>'
+                     '<audioPackFormatIDRef>AP_0003%04X</audioPackFormatIDRef>'
+                     '</audioTrackUID>' % (uid, bits, sr, 0x1001 + i, 0x1001 + i))
+
+    else:
+        # Traditional Bed + N Objects
+        # ---- audioContent (strictly 1 in Dolby Atmos profile, references Bed + Objects) ----
+        A.append('<audioContent audioContentID="ACO_1001" audioContentName="SurroundUpmix">')
+        A.append('<audioObjectIDRef>AO_1001</audioObjectIDRef>')
+        for i in range(len(objects or [])):
+            A.append('<audioObjectIDRef>AO_%04X</audioObjectIDRef>' % (0x1002 + i))
+        A.append('<dialogue mixedContentKind="0">2</dialogue></audioContent>')
+
+        # ---- audioObject: Bed ----
+        A.append('<audioObject audioObjectID="AO_1001" audioObjectName="Bed" '
+                 'start="%s" duration="%s">' % (_t(0), total))
+        A.append('<audioPackFormatIDRef>AP_00011001</audioPackFormatIDRef>')
+        for k in range(10):
+            A.append('<audioTrackUIDRef>ATU_%08X</audioTrackUIDRef>' % (k + 1))
         A.append('</audioObject>')
 
-    # ---- bed audioPackFormat ----
-    A.append('<audioPackFormat audioPackFormatID="AP_00011001" '
-             'audioPackFormatName="AtmosCustomBed" typeDefinition="DirectSpeakers" '
-             'typeLabel="0001">')
-    for k in range(10):
-        A.append('<audioChannelFormatIDRef>AC_0001%04x</audioChannelFormatIDRef>' % (0x1001 + k))
-    A.append('</audioPackFormat>')
-    # ---- object audioPackFormats ----
-    for i, ob in enumerate(objects or []):
-        A.append('<audioPackFormat audioPackFormatID="AP_0003%04x" '
-                 'audioPackFormatName="Obj_%d" typeDefinition="Objects" typeLabel="0003">'
-                 '<audioChannelFormatIDRef>AC_0003%04x</audioChannelFormatIDRef>'
-                 '</audioPackFormat>' % (0x1001 + i, i + 1, 0x1001 + i))
+        # ---- audioObject: each object ----
+        for i, ob in enumerate(objects or []):
+            obj_id = 0x1002 + i
+            uid = 11 + i
+            A.append('<audioObject audioObjectID="AO_%04X" audioObjectName="%s" '
+                     'start="%s" duration="%s">'
+                     % (obj_id, ob.get("name", "Audio Object %d" % (i + 1)),
+                        _t(0), total))
+            A.append('<audioPackFormatIDRef>AP_0003%04X</audioPackFormatIDRef>' % (0x1001 + i))
+            A.append('<audioTrackUIDRef>ATU_%08X</audioTrackUIDRef>' % uid)
+            A.append('</audioObject>')
 
-    # ---- bed audioChannelFormats ----
-    for k, (nm, label, cfname, x, y, z) in enumerate(bed):
-        A.append('<audioChannelFormat audioChannelFormatID="AC_0001%04x" '
-                 'audioChannelFormatName="%s" typeDefinition="DirectSpeakers" '
-                 'typeLabel="0001">' % (0x1001 + k, cfname))
-        A.append('<audioBlockFormat audioBlockFormatID="AB_0001%04x_00000001">'
-                 % (0x1001 + k))
-        A.append('<cartesian>1</cartesian>')
-        A.append('<position coordinate="X">%.10f</position>' % x)
-        A.append('<position coordinate="Y">%.10f</position>' % y)
-        if z is not None:
-            A.append('<position coordinate="Z">%.10f</position>' % z)
-        A.append('<speakerLabel>%s</speakerLabel>' % label)
-        A.append('</audioBlockFormat></audioChannelFormat>')
-    # ---- object audioChannelFormats (with position automation) ----
-    for i, ob in enumerate(objects or []):
-        cid = 0x1001 + i
-        A.append('<audioChannelFormat audioChannelFormatID="AC_0003%04x" '
-                 'audioChannelFormatName="Obj_%d" typeDefinition="Objects" '
-                 'typeLabel="0003">' % (cid, i + 1))
-        blocks = ob.get("blocks") or [(0.0, n_frames / float(sr),
-                                       ob.get("x", 0.0), ob.get("y", 1.0),
-                                       ob.get("z", 0.0))]
-        for bi, (rt, dur, x, y, z) in enumerate(blocks):
-            A.append('<audioBlockFormat audioBlockFormatID="AB_0003%04x_%08x" '
-                     'rtime="%s" duration="%s">' % (cid, bi + 1, _t(rt), _t(dur)))
+        # ---- bed audioPackFormat ----
+        A.append('<audioPackFormat audioPackFormatID="AP_00011001" '
+                 'audioPackFormatName="Bed" typeDefinition="DirectSpeakers" '
+                 'typeLabel="0001">')
+        for k in range(10):
+            A.append('<audioChannelFormatIDRef>AC_0001%04X</audioChannelFormatIDRef>' % (0x1001 + k))
+        A.append('</audioPackFormat>')
+
+        # ---- object audioPackFormats ----
+        for i, ob in enumerate(objects or []):
+            A.append('<audioPackFormat audioPackFormatID="AP_0003%04X" '
+                     'audioPackFormatName="%s" typeDefinition="Objects" typeLabel="0003">'
+                     '<audioChannelFormatIDRef>AC_0003%04X</audioChannelFormatIDRef>'
+                     '</audioPackFormat>' % (0x1001 + i, ob.get("name", "Obj_%d" % (i + 1)), 0x1001 + i))
+
+        # ---- bed audioChannelFormats ----
+        for k, (nm, label, cfname, x, y, z) in enumerate(bed):
+            A.append('<audioChannelFormat audioChannelFormatID="AC_0001%04X" '
+                     'audioChannelFormatName="%s" typeDefinition="DirectSpeakers" '
+                     'typeLabel="0001">' % (0x1001 + k, cfname))
+            A.append('<audioBlockFormat audioBlockFormatID="AB_0001%04X_00000001">'
+                     % (0x1001 + k))
             A.append('<cartesian>1</cartesian>')
             A.append('<position coordinate="X">%.10f</position>' % x)
             A.append('<position coordinate="Y">%.10f</position>' % y)
-            A.append('<position coordinate="Z">%.10f</position>' % z)
-            A.append('<jumpPosition interpolationLength="%.5f">1</jumpPosition>'
-                     % (0.0 if bi == 0 else dur))
-            A.append('</audioBlockFormat>')
-        A.append('</audioChannelFormat>')
+            if z is not None:
+                A.append('<position coordinate="Z">%.10f</position>' % z)
+            A.append('<speakerLabel>%s</speakerLabel>' % label)
+            A.append('</audioBlockFormat></audioChannelFormat>')
 
-    # ---- audioStreamFormat + audioTrackFormat (bed + objects) ----
-    def stream_track(fmt_hex, name):
-        s = ('<audioStreamFormat audioStreamFormatID="AS_%s" '
-             'audioStreamFormatName="PCM_%s" formatDefinition="PCM" formatLabel="0001">'
-             '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
-             '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
-             '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
-             '</audioStreamFormat>')
-        t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" '
-             'audioTrackFormatName="PCM_%s" formatDefinition="PCM" formatLabel="0001">'
-             '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
-             '</audioTrackFormat>')
-        return s, t
-    for k in range(10):
-        hexid = "0001%04x" % (0x1001 + k)
-        pack = "00011001"
-        s = ('<audioStreamFormat audioStreamFormatID="AS_%s" audioStreamFormatName="PCM_bed_%d" '
-             'formatDefinition="PCM" formatLabel="0001">'
-             '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
-             '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
-             '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
-             '</audioStreamFormat>' % (hexid, k + 1, hexid, pack, hexid))
-        t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" audioTrackFormatName="PCM_bed_%d" '
-             'formatDefinition="PCM" formatLabel="0001">'
-             '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
-             '</audioTrackFormat>' % (hexid, k + 1, hexid))
-        A.append(s); A.append(t)
-    for i in range(len(objects or [])):
-        hexid = "0003%04x" % (0x1001 + i)
-        s = ('<audioStreamFormat audioStreamFormatID="AS_%s" audioStreamFormatName="PCM_obj_%d" '
-             'formatDefinition="PCM" formatLabel="0001">'
-             '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
-             '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
-             '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
-             '</audioStreamFormat>' % (hexid, i + 1, hexid, hexid, hexid))
-        t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" audioTrackFormatName="PCM_obj_%d" '
-             'formatDefinition="PCM" formatLabel="0001">'
-             '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
-             '</audioTrackFormat>' % (hexid, i + 1, hexid))
-        A.append(s); A.append(t)
+        # ---- object audioChannelFormats (with position automation) ----
+        for i, ob in enumerate(objects or []):
+            cid = 0x1001 + i
+            A.append('<audioChannelFormat audioChannelFormatID="AC_0003%04X" '
+                     'audioChannelFormatName="%s" typeDefinition="Objects" '
+                     'typeLabel="0003">' % (cid, ob.get("name", "Obj_%d" % (i + 1))))
+            blocks = ob.get("blocks") or [(0.0, n_frames / float(sr),
+                                           ob.get("x", 0.0), ob.get("y", 1.0),
+                                           ob.get("z", 0.0))]
+            for bi, (rt, dur, x, y, z) in enumerate(blocks):
+                A.append('<audioBlockFormat audioBlockFormatID="AB_0003%04X_%08X" '
+                         'rtime="%s" duration="%s">' % (cid, bi + 1, _t(rt), _t(dur)))
+                A.append('<cartesian>1</cartesian>')
+                A.append('<position coordinate="X">%.10f</position>' % x)
+                A.append('<position coordinate="Y">%.10f</position>' % y)
+                A.append('<position coordinate="Z">%.10f</position>' % z)
+                A.append('<jumpPosition>0</jumpPosition>')
+                A.append('</audioBlockFormat>')
+            A.append('</audioChannelFormat>')
 
-    # ---- audioTrackUIDs ----
-    for k in range(10):
-        A.append('<audioTrackUID UID="ATU_%08x" bitDepth="%d" sampleRate="%d">'
-                 '<audioTrackFormatIDRef>AT_0001%04x_01</audioTrackFormatIDRef>'
-                 '<audioPackFormatIDRef>AP_00011001</audioPackFormatIDRef>'
-                 '</audioTrackUID>' % (k + 1, bits, sr, 0x1001 + k))
-    for i in range(len(objects or [])):
-        uid = 11 + i
-        A.append('<audioTrackUID UID="ATU_%08x" bitDepth="%d" sampleRate="%d">'
-                 '<audioTrackFormatIDRef>AT_0003%04x_01</audioTrackFormatIDRef>'
-                 '<audioPackFormatIDRef>AP_0003%04x</audioPackFormatIDRef>'
-                 '</audioTrackUID>' % (uid, bits, sr, 0x1001 + i, 0x1001 + i))
+        # ---- audioStreamFormat + audioTrackFormat (bed + objects) ----
+        for k in range(10):
+            hexid = "0001%04X" % (0x1001 + k)
+            pack = "00011001"
+            s = ('<audioStreamFormat audioStreamFormatID="AS_%s" audioStreamFormatName="PCM_bed_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
+                 '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
+                 '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
+                 '</audioStreamFormat>' % (hexid, k + 1, hexid, pack, hexid))
+            t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" audioTrackFormatName="PCM_bed_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
+                 '</audioTrackFormat>' % (hexid, k + 1, hexid))
+            A.append(s); A.append(t)
+        for i in range(len(objects or [])):
+            hexid = "0003%04X" % (0x1001 + i)
+            s = ('<audioStreamFormat audioStreamFormatID="AS_%s" audioStreamFormatName="PCM_obj_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioChannelFormatIDRef>AC_%s</audioChannelFormatIDRef>'
+                 '<audioPackFormatIDRef>AP_%s</audioPackFormatIDRef>'
+                 '<audioTrackFormatIDRef>AT_%s_01</audioTrackFormatIDRef>'
+                 '</audioStreamFormat>' % (hexid, i + 1, hexid, hexid, hexid))
+            t = ('<audioTrackFormat audioTrackFormatID="AT_%s_01" audioTrackFormatName="PCM_obj_%d" '
+                 'formatDefinition="PCM" formatLabel="0001">'
+                 '<audioStreamFormatIDRef>AS_%s</audioStreamFormatIDRef>'
+                 '</audioTrackFormat>' % (hexid, i + 1, hexid))
+            A.append(s); A.append(t)
+
+        # ---- audioTrackUIDs ----
+        for k in range(10):
+            A.append('<audioTrackUID UID="ATU_%08X" bitDepth="%d" sampleRate="%d">'
+                     '<audioTrackFormatIDRef>AT_0001%04X_01</audioTrackFormatIDRef>'
+                     '<audioPackFormatIDRef>AP_00011001</audioPackFormatIDRef>'
+                     '</audioTrackUID>' % (k + 1, bits, sr, 0x1001 + k))
+        for i in range(len(objects or [])):
+            uid = 11 + i
+            A.append('<audioTrackUID UID="ATU_%08X" bitDepth="%d" sampleRate="%d">'
+                     '<audioTrackFormatIDRef>AT_0003%04X_01</audioTrackFormatIDRef>'
+                     '<audioPackFormatIDRef>AP_0003%04X</audioPackFormatIDRef>'
+                     '</audioTrackUID>' % (uid, bits, sr, 0x1001 + i, 0x1001 + i))
 
     A.append('</audioFormatExtended></format></coreMetadata></ebuCoreMain>')
     return "".join(A).encode("utf-8")
 
 
-def _chna(n_objects):
+def _chna(n_objects, all_objects=False):
+    if all_objects:
+        n_tracks = n_objects
+        body = struct.pack("<HH", n_tracks, n_tracks)
+        def rec(idx, uid, trackfmt, packfmt):
+            return (struct.pack("<H", idx)
+                    + uid.encode().ljust(12, b"\x00")
+                    + trackfmt.encode().ljust(14, b"\x00")
+                    + packfmt.encode().ljust(11, b"\x00")
+                    + b"\x00")
+        for i in range(n_objects):
+            body += rec(1 + i, "ATU_%08X" % (1 + i),
+                        "AT_0003%04X_01" % (0x1001 + i), "AP_0003%04X" % (0x1001 + i))
+        return body
+
     n_tracks = 10 + n_objects
     body = struct.pack("<HH", n_tracks, n_tracks)
     def rec(idx, uid, trackfmt, packfmt):
@@ -296,11 +389,11 @@ def _chna(n_objects):
                 + packfmt.encode().ljust(11, b"\x00")
                 + b"\x00")
     for k in range(10):
-        body += rec(k + 1, "ATU_%08x" % (k + 1),
-                    "AT_0001%04x_01" % (0x1001 + k), "AP_00011001")
+        body += rec(k + 1, "ATU_%08X" % (k + 1),
+                    "AT_0001%04X_01" % (0x1001 + k), "AP_00011001")
     for i in range(n_objects):
-        body += rec(11 + i, "ATU_%08x" % (11 + i),
-                    "AT_0003%04x_01" % (0x1001 + i), "AP_0003%04x" % (0x1001 + i))
+        body += rec(11 + i, "ATU_%08X" % (11 + i),
+                    "AT_0003%04X_01" % (0x1001 + i), "AP_0003%04X" % (0x1001 + i))
     return body
 
 
@@ -311,13 +404,14 @@ def _chunk(cid, body):
     return out
 
 
-def write_adm_bwf(path, channels, sr, objects=None, bits=24,
+def write_adm_bwf(path, channels=None, sr=48000, objects=None, bits=24,
                   program_name="SurroundUpmix", object_signals=None, dbmd=None,
-                  bed=None):
+                  bed=None, all_objects=False):
     """Write an ADM BWF master.
 
     channels : {name: mono np.array} for the 10 bed channels (our WAVE names
                FL FR FC LFE BL BR SL SR TFL TFR). Missing -> silence.
+               Ignored when all_objects=True.
     objects  : optional list of dicts describing objects, each:
                  {"name": str, "blocks": [(rtime_s, dur_s, x, y, z), ...]}
                with a matching mono signal in object_signals[i].
@@ -326,6 +420,8 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
                playback-verified order); pass BED_RENDERER for a file that
                imports into the Dolby Atmos Renderer with correct side/rear
                mapping. Both the PCM interleave and the axml follow this.
+    all_objects : when True, writes a pure All-Objects Master (0 bed channels,
+                  N audio objects) matching modern Dolby Atmos Renderer practices.
     Returns the written path (forces .wav).
     """
     if not path.lower().endswith(".wav"):
@@ -333,44 +429,59 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
     objects = objects or []
     object_signals = object_signals or []
     bed = bed or BED
+    channels = channels or {}
 
     n = 0
-    for v in channels.values():
-        if v is not None:
-            n = max(n, len(v))
+    if not all_objects:
+        for v in channels.values():
+            if v is not None:
+                n = max(n, len(v))
     for s in object_signals:
         if s is not None:
             n = max(n, len(s))
 
-    # Interleave: 10 bed channels in the chosen bed order, then objects.
-    cols = []
-    for nm, *_ in bed:
-        v = channels.get(nm)
-        if v is None or len(v) == 0:
-            v = np.zeros(n, dtype=np.float32)
-        elif len(v) < n:
-            v = np.concatenate([v, np.zeros(n - len(v), dtype=np.float32)])
-        cols.append(v[:n])
-    for s in object_signals:
-        if s is None or len(s) == 0:
-            s = np.zeros(n, dtype=np.float32)
-        elif len(s) < n:
-            s = np.concatenate([s, np.zeros(n - len(s), dtype=np.float32)])
-        cols.append(s[:n])
-    interleaved = np.stack(cols, axis=1).astype(np.float32)
+    if all_objects:
+        cols = []
+        for s in object_signals:
+            if s is None or len(s) == 0:
+                s = np.zeros(n, dtype=np.float32)
+            elif len(s) < n:
+                s = np.concatenate([s, np.zeros(n - len(s), dtype=np.float32)])
+            cols.append(s[:n])
+        interleaved = np.stack(cols, axis=1).astype(np.float32)
+        dbmd = None
+    else:
+        # Interleave: 10 bed channels in the chosen bed order, then objects.
+        cols = []
+        for nm, *_ in bed:
+            v = channels.get(nm)
+            if v is None or len(v) == 0:
+                v = np.zeros(n, dtype=np.float32)
+            elif len(v) < n:
+                v = np.concatenate([v, np.zeros(n - len(v), dtype=np.float32)])
+            cols.append(v[:n])
+        for s in object_signals:
+            if s is None or len(s) == 0:
+                s = np.zeros(n, dtype=np.float32)
+            elif len(s) < n:
+                s = np.concatenate([s, np.zeros(n - len(s), dtype=np.float32)])
+            cols.append(s[:n])
+        interleaved = np.stack(cols, axis=1).astype(np.float32)
+
+        if dbmd is None and not objects:        # generate Dolby metadata chunk for pure bed
+            dbmd = make_dbmd(interleaved.shape[1])
+        elif objects:
+            dbmd = None                         # pure standard ADM (axml + chna) to prevent illegal object collisions
 
     ch = interleaved.shape[1]
     block_align = ch * bits // 8
     data = _pcm_bytes(interleaved, bits)
     data_size = len(data)
 
-    if dbmd is None:                        # generate a valid Dolby metadata chunk
-        dbmd = make_dbmd(ch)
-
     fmt_body = struct.pack("<HHIIHH", 0x0001, ch, sr, sr * block_align,
                            block_align, bits)
-    axml = _axml(n, sr, bits, objects, program_name, bed=bed)
-    chna = _chna(len(objects))
+    axml = _axml(n, sr, bits, objects, program_name, bed=bed, all_objects=all_objects)
+    chna = _chna(len(objects), all_objects=all_objects)
 
     fmt_chunk = _chunk(b"fmt ", fmt_body)
     axml_chunk = _chunk(b"axml", axml)
@@ -402,3 +513,4 @@ def write_adm_bwf(path, channels, sr, objects=None, bits=24,
         if dbmd_chunk:
             f.write(dbmd_chunk)
     return path
+

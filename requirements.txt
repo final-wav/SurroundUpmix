@@ -2,6 +2,7 @@
 numpy>=1.24
 scipy>=1.10
 soundfile>=0.12
+mutagen>=1.47
 
 # Separation (full chain, allinone.py) - install separately, see README:
 #   pip install -U demucs

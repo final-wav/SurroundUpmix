@@ -141,6 +141,7 @@ wrap, so the front image is never cancelled.
 
 Common options (both CLIs): `--rear-gain`, `--rear-below-front`,
 `--vocal-mode auto|spread|forward`, `--backing-gain auto|<dB>`, `--lfe-cross <Hz>`,
+`--norm-level <dB>` (default -1.0 dBFS True-Peak headroom), `--adm-objects`,
 `--wav` (force WAV even for 8 channels or fewer).
 
 ## Detail recovery
@@ -234,8 +235,23 @@ channel order:
   `L R C LFE  Lss Rss  Lrs Rrs  Ltm Rtm` (sides before rears). Use this when
   importing into the Renderer in Studio One so the sides and rears map correctly.
   `--adm --adm-order renderer`.
+- **Discrete 3D Audio Objects**: when exporting Dolby Atmos (`--adm`), passing
+  `--adm-objects` places split-out stems (vocals, backing, guitar, piano, fx) as discrete 3D audio objects with
+  Cartesian coordinates instead of folding them into the 7.1.2 bed.
+- `--all-objects`: writes the modern industry-standard **30-channel Studio One & Dolby Atmos Master**:
+  - **Channels 1–10 (`Src 0`–`Src 9`)**: 7.1.2 Bed Carrier (`AP_00011001` in `BED_RENDERER` order) with digital silence (`0.0`). This guarantees 100% plug-and-play compatibility with Studio One, Logic Pro, Pro Tools, and DaVinci Resolve without the *"File does not contain beds"* import error.
+  - **Channels 11–30 (`Src 10`–`Src 29`)**: 20 interactive 3D Audio Objects:
+    - **14 Fixed Speaker Anchors (7.1.6 Room Perimeter)**:
+      - Front L/C/R: `(±1.0, 1.0, 0.0)` and `(0.0, 1.0, 0.0)`
+      - LFE: `(0.0, 0.8, 0.0)`
+      - Side Surrounds L/R: `(±1.0, 0.0, 0.0)`
+      - Rear Surrounds L/R: `(±1.0, -1.0, 0.0)`
+      - Top Front L/R: `(±1.0, 1.0, 1.0)` (front ceiling, directly above Front L/R)
+      - Top Middle L/R: `(±1.0, 0.0, 1.0)` (middle ceiling, directly above Side Surrounds)
+      - Top Rear L/R: `(±1.0, -1.0, 1.0)` (rear ceiling, directly above Rear Surrounds)
+    - **6 Dynamic Moving 3D Objects**: Lead Vocal (intimate whisper proximity + pitch-to-elevation), Backing L/R (continuous 360° orbit around the listener), Guitar / Solo (dynamic 3D pan tracking), Piano / Synth (stereo width & shimmering elevation), Ear Candy / FX (spatial riser & 3D delay swirl).
 
-Both are in the GUI's Output list. `--adm` forces the 7.1.2 layout.
+All are in the GUI's Output list. `--adm` forces the 7.1.2 layout.
 
 Playback note: consumer players (VLC, MusicBee) play the raw PCM and route the
 ear-level 7.1 correctly but not the two height channels, which is a limit of raw
@@ -251,7 +267,8 @@ FLAC/WAV.
 surroundupmix/          the engine (a normal Python package)
   layouts.py            speaker layouts + WAVE channel masks
   io.py                 load stems, write FLAC / WAV-extensible
-  adm.py                write Dolby Atmos ADM BWF (both bed orders)
+  adm.py                write Dolby Atmos ADM BWF (both bed orders + all-objects)
+  motion.py             short-time pan tracking, 360° orbit & whisper proximity
   decompose.py          direct/ambient split (the core), pan, coherence
   detect.py             doubled-vocal classifier (GCC-PHAT)
   voice.py              lead/backing role check for the karaoke split
@@ -265,6 +282,7 @@ surroundupmix/          the engine (a normal Python package)
   engine.py             end-to-end upmix_folder()
 upmix.py                CLI: stems folder -> surround
 allinone.py             CLI: song -> Demucs -> (split) -> surround
+demo_generator.py       generator for Dolby Atmos 3D demo masters
 gui.py                  dark Tkinter GUI (drives both CLIs)
 SurroundUpmix-GUI.bat   double-click launcher for the GUI (Windows)
 split_vocals.py         lead/backing Roformer karaoke split (used by allinone)

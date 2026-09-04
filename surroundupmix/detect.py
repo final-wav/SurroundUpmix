@@ -16,10 +16,21 @@ def classify_vocal_width(st):
     L = st.L.astype(np.float64)
     R = st.R.astype(np.float64)
 
-    # analyse up to 30 s from the middle
+    # analyse up to 30 s: select the window with the highest vocal energy/activity
     maxn = sr * 30
     if L.size > maxn:
-        s = (L.size - maxn) // 2
+        step = max(1, sr // 2)
+        n_blocks = L.size // step
+        w_blocks = maxn // step
+        if n_blocks > w_blocks:
+            # calculate power in 0.5s blocks to find highest-energy contiguous 30s
+            blocks = np.mean(
+                (L[:n_blocks * step].reshape(-1, step) ** 2 +
+                 R[:n_blocks * step].reshape(-1, step) ** 2), axis=1)
+            rolling = np.convolve(blocks, np.ones(w_blocks), mode="valid")
+            s = int(np.argmax(rolling)) * step
+        else:
+            s = (L.size - maxn) // 2
         L, R = L[s:s + maxn], R[s:s + maxn]
     if L.size < sr or (np.abs(L).max() < 2.5e-4 and np.abs(R).max() < 2.5e-4):
         return "dry"

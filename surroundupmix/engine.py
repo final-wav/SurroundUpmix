@@ -5,7 +5,7 @@ import numpy as np
 from . import presets as _presets
 from .balance import auto_balance, build_lfe, normalize
 from .detect import classify_vocal_width
-from .dsp import rms, highpass, db_to_lin
+from .dsp import rms, highpass, db_to_lin, decorrelate as dsp_decorrelate
 from .io import Stereo, load, load_stems, write_surround
 from .layouts import LAYOUTS, has_heights
 from .routing import spatialize
@@ -44,19 +44,27 @@ def _load_original(path, sr, n):
 def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  track_label=None, rear_gain=0.0, rear_below_front=None,
                  vocal_mode="auto", backing_gain="auto", backing_below_lead=8.0,
-                 lfe_cross=None, norm_level=-0.1, force_wav=False, place=None,
+                 lfe_cross=None, norm_level=-1.0, force_wav=False, place=None,
                  overrides=None, split_vocals="off", split_python=None,
-                 adm=False, adm_bits=24, adm_order="playback", original=None,
-                 decorrelate=True, vocal_roles="auto", recover_detail=True,
+                 adm=False, adm_bits=24, adm_order="playback", adm_objects=False,
+                 adm_all_objects=False,
+                 original=None, decorrelate=True, vocal_roles="auto", recover_detail=True,
                  recover_gain=0.0, binaural_amount=0.0, verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
 
     adm=True writes a Dolby-Atmos ADM BWF master (a 7.1.2 bed, 48 kHz) that
     opens directly in the Dolby Atmos Renderer - no channel mapping. It forces
     the 7.1.2 layout and resamples to 48 kHz if needed (Atmos requirement).
+    adm_all_objects=True writes a Studio One & Dolby Atmos Renderer compatible
+    30-channel All-Objects Master (10 silent 7.1.2 bed carrier channels + 14 speaker
+    anchors + 6 dynamic moving 3D objects).
     """
+    if adm_all_objects or fmt == "all_objects":
+        adm = True
+        adm_all_objects = True
     if adm:
         fmt = "7.1.2"   # the Atmos bed is 7.1.2
+
     stems, sr = load_stems(stems_folder)
     from .overrides import normalize as _norm_ov, zones as _ov_zones
     ov = _norm_ov(overrides)
@@ -165,7 +173,8 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
 
     # spatialise
     chans = spatialize(stems, fmt, p, sr, vocal_class=vocal_class,
-                       backing_gain_db=backing_gain_db, place=place, overrides=ov)
+                       backing_gain_db=backing_gain_db, place=place, overrides=ov,
+                       discrete_backing=(adm and adm_objects and "backing" in stems))
 
     # LFE
     lfe = build_lfe(stems, p["lfe_cross"], sr, overrides=ov)
@@ -225,11 +234,228 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
     track_label = track_label or os.path.basename(os.path.normpath(stems_folder))
     channels = {c: chans.total(c) for c in LAYOUTS[fmt]}
 
+    if adm and adm_all_objects:
+        from .adm import write_adm_bwf, ANCHORS_7_1_6
+        from .motion import build_dynamic_blocks
+
+        sr_out = sr
+        all_obj_defs = []
+        all_obj_signals = []
+
+        # 1. Synthesize the 14 Speaker Anchors (7.1.6 layout)
+        fl_sig = chans.total("FL")
+        fr_sig = chans.total("FR")
+        fc_sig = chans.total("FC")
+        lfe_sig = chans.total("LFE")
+        sl_sig = chans.total("SL")
+        sr_sig = chans.total("SR")
+        bl_sig = chans.total("BL")
+        br_sig = chans.total("BR")
+        tfl_base = chans.total("TFL")
+        tfr_base = chans.total("TFR")
+
+        # Front Heights: air and presence
+        tfl_sig = 0.85 * tfl_base + 0.15 * highpass(fl_sig, 3000.0, sr)
+        tfr_sig = 0.85 * tfr_base + 0.15 * highpass(fr_sig, 3000.0, sr)
+        # Middle Heights (Top Middle)
+        tml_sig = tfl_base.copy()
+        tmr_sig = tfr_base.copy()
+        # Rear Heights: decorrelated diffuse ceiling canopy + rear wash
+        tfl_decorr = dsp_decorrelate(tfl_base, sr)
+        tfr_decorr = dsp_decorrelate(tfr_base, sr)
+        trl_sig = 0.70 * tfl_decorr + 0.30 * bl_sig
+        trr_sig = 0.70 * tfr_decorr + 0.30 * br_sig
+
+        anchor_map = {
+            "FL": fl_sig, "FR": fr_sig, "FC": fc_sig, "LFE": lfe_sig,
+            "SL": sl_sig, "SR": sr_sig, "BL": bl_sig, "BR": br_sig,
+            "TFL": tfl_sig, "TFR": tfr_sig, "TML": tml_sig, "TMR": tmr_sig,
+            "TRL": trl_sig, "TRR": trr_sig,
+        }
+
+        for ch_key, disp_name, ax, ay, az in ANCHORS_7_1_6:
+            sig = anchor_map.get(ch_key, np.zeros(chans.n, dtype=np.float32))
+            all_obj_defs.append({
+                "name": disp_name,
+                "x": ax, "y": ay, "z": az,
+            })
+            all_obj_signals.append(sig)
+
+        # 2. Dynamic 3D Moving Objects (Channels 15-20)
+        n_samples = chans.n
+
+        # Object 15 & 16: Backing Left & Right (Continuous 3D Motion + 360° Orbit)
+        bg_sig_l = np.zeros(n_samples, dtype=np.float32)
+        bg_sig_r = np.zeros(n_samples, dtype=np.float32)
+        if "backing" in stems:
+            bg_data = stems["backing"].data
+            ov_bg = ov.get("backing", {})
+            bg_mul = db_to_lin(backing_gain_db + ov_bg.get("level", 0.0))
+            bg_sig_l = bg_data[:, 0] * bg_mul
+            bg_sig_r = bg_data[:, 1] * bg_mul
+            b_bg_l = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.50,
+                                          base_z=0.35, pan_range=0.45, orbit=True)
+            b_bg_r = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.50,
+                                          base_z=0.35, pan_range=0.45, orbit=True)
+        else:
+            b_bg_l = [(0.0, n_samples / float(sr), -0.85, -0.50, 0.35)]
+            b_bg_r = [(0.0, n_samples / float(sr), 0.85, -0.50, 0.35)]
+
+        all_obj_defs.append({"name": "Backing Left", "blocks": b_bg_l})
+        all_obj_signals.append(bg_sig_l)
+        all_obj_defs.append({"name": "Backing Right", "blocks": b_bg_r})
+        all_obj_signals.append(bg_sig_r)
+
+        # Object 17: Lead Vocal (Intimate Whisper Proximity + Pitch Elevation)
+        voc_sig = np.zeros(n_samples, dtype=np.float32)
+        if "vocals" in stems:
+            v_data = stems["vocals"].data
+            voc_sig = 0.5 * (v_data[:, 0] + v_data[:, 1])
+            b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.70,
+                                         base_z=0.10, pan_range=0.35,
+                                         intimacy_proximity=True, pitch_elevation=True)
+        else:
+            b_voc = [(0.0, n_samples / float(sr), 0.0, 0.70, 0.10)]
+        all_obj_defs.append({"name": "Lead Vocal", "blocks": b_voc})
+        all_obj_signals.append(voc_sig)
+
+        # Object 18: Guitar / Solo (Dynamic 3D Tracking & Solo Swirl)
+        gtr_stem = stems.get("guitar", stems.get("other"))
+        gtr_sig = np.zeros(n_samples, dtype=np.float32)
+        if gtr_stem is not None:
+            g_data = gtr_stem.data
+            gtr_sig = g_data[:, 0] * 0.75
+            b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.60, base_y=0.40,
+                                         base_z=0.25, pan_range=0.50, orbit=True)
+        else:
+            b_gtr = [(0.0, n_samples / float(sr), -0.60, 0.40, 0.25)]
+        all_obj_defs.append({"name": "Guitar / Solo", "blocks": b_gtr})
+        all_obj_signals.append(gtr_sig)
+
+        # Object 19: Piano / Synth / Texture (Stereo Width & Shimmering Height)
+        pno_stem = stems.get("piano", stems.get("other"))
+        pno_sig = np.zeros(n_samples, dtype=np.float32)
+        if pno_stem is not None:
+            p_data = pno_stem.data
+            pno_sig = (p_data[:, 1] if p_data.shape[1] > 1 else p_data[:, 0]) * 0.75
+            b_pno = build_dynamic_blocks(p_data, sr, base_x=0.60, base_y=0.40,
+                                         base_z=0.25, pan_range=0.50, pitch_elevation=True)
+        else:
+            b_pno = [(0.0, n_samples / float(sr), 0.60, 0.40, 0.25)]
+        all_obj_defs.append({"name": "Piano / Synth", "blocks": b_pno})
+        all_obj_signals.append(pno_sig)
+
+        # Object 20: Ear Candy / FX / Delay (Spatial Riser & 3D Delay Swirl)
+        fx_sig = np.zeros(n_samples, dtype=np.float32)
+        fx_src = stems.get("residual", stems.get("other", stems.get("vocals")))
+        if fx_src is not None:
+            f_data = fx_src.data
+            if f_data.ndim > 1 and f_data.shape[1] > 1:
+                fx_sig = 0.5 * (f_data[:, 0] - f_data[:, 1]) * 0.70
+            else:
+                fx_sig = f_data.ravel() * 0.70
+            b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.60,
+                                        base_z=0.60, pan_range=0.80, orbit=True,
+                                        pitch_elevation=True)
+        else:
+            b_fx = [(0.0, n_samples / float(sr), 0.0, -0.60, 0.60)]
+        all_obj_defs.append({"name": "Ear Candy / FX", "blocks": b_fx})
+        all_obj_signals.append(fx_sig)
+
+        if sr != 48000:
+            from math import gcd
+            from scipy.signal import resample_poly
+            g = gcd(48000, sr)
+            up, down = 48000 // g, sr // g
+            all_obj_signals = [resample_poly(s, up, down).astype(np.float32)
+                               for s in all_obj_signals]
+            _log(verbose, "  resampled %d -> 48000 Hz (Atmos)" % sr)
+            sr_out = 48000
+
+        from .adm import BED_RENDERER
+        base = os.path.join(out_dir, "%s [%s %s]" % (track_label, "Atmos All-Objects", preset))
+        # 10 Bed channels (silent carrier in BED_RENDERER order) + 20 Audio Objects
+        # for 100% Studio One & Dolby Atmos Renderer compatibility (total 30 channels).
+        out = write_adm_bwf(base, channels={}, sr=sr_out, objects=all_obj_defs,
+                            object_signals=all_obj_signals, bits=adm_bits,
+                            program_name=track_label, bed=BED_RENDERER, all_objects=False)
+        _log(verbose, "  wrote %s (ADM BWF All-Objects, 10-ch 7.1.2 silent bed carrier + 14 anchors + %d dynamic objects = %d ch, %d-bit)"
+             % (out, len(all_obj_defs) - 14, 10 + len(all_obj_defs), adm_bits))
+        return out
+
     if adm:
         from .adm import write_adm_bwf, BED, BED_RENDERER
         renderer = (adm_order == "renderer")
         bed = BED_RENDERER if renderer else BED
         sr_out = sr
+
+        objects = []
+        object_signals = []
+        if adm_objects:
+            from .motion import build_dynamic_blocks
+            n_samples = chans.n
+
+            # 1 & 2: Backing Left & Right
+            if "backing" in stems:
+                bg_data = stems["backing"].data
+                ov_bg = ov.get("backing", {})
+                bg_mul = db_to_lin(backing_gain_db + ov_bg.get("level", 0.0))
+                b_left = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.50,
+                                              base_z=0.35, pan_range=0.45, orbit=True)
+                objects.append({"name": "Backing Left", "blocks": b_left})
+                object_signals.append(bg_data[:, 0] * bg_mul)
+
+                b_right = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.50,
+                                               base_z=0.35, pan_range=0.45, orbit=True)
+                objects.append({"name": "Backing Right", "blocks": b_right})
+                object_signals.append(bg_data[:, 1] * bg_mul)
+
+            # 3: Lead Vocal (Intimate Whisper Proximity + Pitch Elevation)
+            if "vocals" in stems:
+                v_data = stems["vocals"].data
+                voc_sig = 0.5 * (v_data[:, 0] + v_data[:, 1])
+                b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.70,
+                                             base_z=0.10, pan_range=0.35,
+                                             intimacy_proximity=True, pitch_elevation=True)
+                objects.append({"name": "Lead Vocal", "blocks": b_voc})
+                object_signals.append(voc_sig)
+
+            # 4: Guitar / Solo
+            gtr_stem = stems.get("guitar", stems.get("other"))
+            if gtr_stem is not None:
+                g_data = gtr_stem.data
+                b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.60, base_y=0.40,
+                                             base_z=0.25, pan_range=0.50, orbit=True)
+                objects.append({"name": "Guitar / Solo", "blocks": b_gtr})
+                object_signals.append(g_data[:, 0] * 0.75)
+
+            # 5: Piano / Synth / Texture
+            pno_stem = stems.get("piano", stems.get("other"))
+            if pno_stem is not None:
+                p_data = pno_stem.data
+                p_sig = (p_data[:, 1] if p_data.shape[1] > 1 else p_data[:, 0]) * 0.75
+                b_pno = build_dynamic_blocks(p_data, sr, base_x=0.60, base_y=0.40,
+                                             base_z=0.25, pan_range=0.50, pitch_elevation=True)
+                objects.append({"name": "Piano / Synth", "blocks": b_pno})
+                object_signals.append(p_sig)
+
+            # 6: Ear Candy / FX / Delay
+            fx_src = stems.get("residual", stems.get("other", stems.get("vocals")))
+            if fx_src is not None:
+                f_data = fx_src.data
+                if f_data.ndim > 1 and f_data.shape[1] > 1:
+                    fx_sig = 0.5 * (f_data[:, 0] - f_data[:, 1]) * 0.70
+                else:
+                    fx_sig = f_data.ravel() * 0.70
+                b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.60,
+                                            base_z=0.60, pan_range=0.80, orbit=True,
+                                            pitch_elevation=True)
+                objects.append({"name": "Ear Candy / FX", "blocks": b_fx})
+                object_signals.append(fx_sig)
+
+            _log(verbose, "  adm objects: active (%d 3D objects with dynamic automation)"
+                 % len(objects))
+
         if sr != 48000:                       # Atmos requires 48 kHz
             from math import gcd
             from scipy.signal import resample_poly
@@ -237,17 +463,22 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
             up, down = 48000 // g, sr // g
             channels = {k: resample_poly(v, up, down).astype(np.float32)
                         for k, v in channels.items()}
+            object_signals = [resample_poly(s, up, down).astype(np.float32)
+                              for s in object_signals]
             _log(verbose, "  resampled %d -> 48000 Hz (Atmos)" % sr)
             sr_out = 48000
         tag = "ADM Renderer" if renderer else "Atmos"
         base = os.path.join(out_dir, "%s [%s %s]" % (track_label, tag, preset))
-        out = write_adm_bwf(base, channels, sr_out, objects=None,
+        out = write_adm_bwf(base, channels, sr_out, objects=objects,
+                            object_signals=object_signals,
                             bits=adm_bits, program_name=track_label, bed=bed)
-        _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed, %s order, %d-bit)"
-             % (out, "Renderer" if renderer else "playback", adm_bits))
+        _log(verbose, "  wrote %s (ADM BWF, 7.1.2 bed%s, %s order, %d-bit)"
+             % (out, (" + %d objects" % len(objects)) if objects else "",
+                "Renderer" if renderer else "playback", adm_bits))
         return out
 
     base = os.path.join(out_dir, "%s [%s %s]" % (track_label, fmt, preset))
-    out = write_surround(base, channels, fmt, sr, bits=24, force_wav=force_wav)
+    out = write_surround(base, channels, fmt, sr, bits=24, force_wav=force_wav,
+                         original=original)
     _log(verbose, "  wrote %s (%d ch)" % (out, len(LAYOUTS[fmt])))
     return out

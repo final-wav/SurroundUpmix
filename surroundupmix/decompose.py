@@ -72,6 +72,10 @@ def coherence_masks(Lz, Rz, p):
 def decompose(st, **kw):
     """Split a Stereo into (direct: Stereo, ambient: Stereo)."""
     p = dict(DEFAULTS)
+    if "coh_time" not in kw and hasattr(st, "sr") and st.sr:
+        # scale coh_time to match ~160 ms smoothing regardless of sample rate
+        # (~7 frames at 44.1 kHz / hop 1024)
+        p["coh_time"] = max(1, int(round(0.1625 * st.sr / p["hop"])))
     p.update(kw)
     n = len(st)
     Lz = _stft(st.L, p["nfft"], p["hop"])

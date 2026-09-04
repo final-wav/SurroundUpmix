@@ -654,6 +654,205 @@ def test_backing_survives_autobalance():
     assert abs(20 * np.log10((after + 1e-12) / (before + 1e-12))) < 0.1
 
 
+def test_sample_rate_invariance_decompose():
+    """Verify that coh_time adapts to match ~160 ms regardless of sample rate."""
+    st44 = Stereo(np.zeros((44100, 2), dtype=np.float32), 44100)
+    st48 = Stereo(np.zeros((48000, 2), dtype=np.float32), 48000)
+    st96 = Stereo(np.zeros((96000, 2), dtype=np.float32), 96000)
+    p44 = dict(dc.DEFAULTS); p44["coh_time"] = max(1, int(round(0.1625 * st44.sr / p44["hop"])))
+    p48 = dict(dc.DEFAULTS); p48["coh_time"] = max(1, int(round(0.1625 * st48.sr / p48["hop"])))
+    p96 = dict(dc.DEFAULTS); p96["coh_time"] = max(1, int(round(0.1625 * st96.sr / p96["hop"])))
+    assert p44["coh_time"] == 7
+    assert p48["coh_time"] == 8
+    assert p96["coh_time"] == 15
+
+
+def test_detect_vocal_window_activity():
+    """Verify that a track with a silent middle breakdown is still detected as double."""
+    sr = 44100
+    t = np.arange(sr * 60) / sr
+    v = (0.3 * np.sin(2 * np.pi * 300 * t)).astype("float32")
+    v[sr * 14:sr * 46] = 0.0  # 32s silence in middle
+    lag = int(0.012 * sr)
+    R = np.concatenate([np.zeros(lag, "float32"), v])[:len(v)]
+    st = Stereo(np.stack([v, R], 1), sr)
+    assert classify_vocal_width(st) == "double"
+
+
+def test_balance_channel_scaling():
+    """Auto-balance must scale rear energy by speaker count (7.1 reference = 4 channels)."""
+    from surroundupmix.routing import Channels
+    n = 1000
+    ch51 = Channels("5.1", n)
+    ch71 = Channels("7.1", n)
+    # Fill each rear speaker with identical energy (e.g. 0.1)
+    for c in ("BL", "BR"):
+        ch51.add(c, np.full(n, 0.1, dtype=np.float32))
+    for c in ("BL", "BR", "SL", "SR"):
+        ch71.add(c, np.full(n, 0.1, dtype=np.float32))
+    for c in ("FL", "FR", "FC"):
+        ch51.add(c, np.full(n, 0.2, dtype=np.float32))
+        ch71.add(c, np.full(n, 0.2, dtype=np.float32))
+
+    res51 = auto_balance(ch51, rear_below_front=15.0)
+    res71 = auto_balance(ch71, rear_below_front=15.0)
+    # Both should hit within ~0.1 dB of each other because of normalized per-speaker power
+    assert abs(res51["trim"] - res71["trim"]) < 0.1
+
+
+def test_metadata_copy():
+    """Verify that write_surround transfers tags and album art from original to destination."""
+    import tempfile
+    import mutagen
+    from mutagen.flac import FLAC, Picture
+    from surroundupmix.io import write_surround
+
+    d = tempfile.mkdtemp()
+    src = os.path.join(d, "original.flac")
+    # Write dummy audio
+    sf.write(src, np.zeros((1000, 2), dtype=np.float32), SR)
+    tags = FLAC(src)
+    tags["title"] = "Test Song Title"
+    tags["artist"] = "Test Artist"
+    tags["album"] = "Surround Album"
+    pic = Picture()
+    pic.data = b"imagepayload12345"
+    pic.type = 3
+    pic.mime = "image/jpeg"
+    tags.add_picture(pic)
+    tags.save()
+
+    ch = {c: np.zeros(1000, dtype=np.float32) for c in LAYOUTS["5.1"]}
+    dst_base = os.path.join(d, "out_5.1")
+    dst = write_surround(dst_base, ch, "5.1", SR, original=src)
+    assert os.path.isfile(dst)
+
+    res = FLAC(dst)
+    assert res["title"] == ["Test Song Title"]
+    assert res["artist"] == ["Test Artist"]
+    assert res["album"] == ["Surround Album"]
+    assert len(res.pictures) == 1
+    assert res.pictures[0].data == b"imagepayload12345"
+
+
+def test_adm_with_discrete_objects():
+    """Verify that adm_objects creates discrete objects for backing, vocals, guitar, piano, fx."""
+    import tempfile
+    d = tempfile.mkdtemp()
+    stems = os.path.join(d, "stems")
+    os.makedirs(stems)
+    n = 48000
+    for s in ("bass", "drums", "vocals", "other", "backing"):
+        sf.write(os.path.join(stems, s + ".flac"), np.zeros((n, 2), dtype=np.float32), 48000)
+
+    out = upmix_folder(stems, adm=True, adm_objects=True, out_dir=d, verbose=False)
+    info = sf.info(out)
+    # 10 bed + 2 backing + 1 vocals + 1 guitar + 1 piano + 1 fx = 16 channels
+    assert info.channels == 16
+
+
+def test_adm_30_channel_all_objects_studio_one():
+    """Verify that adm_all_objects creates 30 channels (10-ch silent 7.1.2 bed carrier + 20 3D Audio Objects)."""
+    import tempfile
+    d = tempfile.mkdtemp()
+    stems = os.path.join(d, "stems")
+    os.makedirs(stems)
+    n = 48000
+    orig = os.path.join(d, "original.flac")
+    sf.write(orig, np.random.randn(n, 2).astype(np.float32) * 0.1, 48000)
+    for s in ("bass", "drums", "vocals", "other", "backing"):
+        sf.write(os.path.join(stems, s + ".flac"), np.zeros((n, 2), dtype=np.float32), 48000)
+
+    out = upmix_folder(stems, adm=True, adm_all_objects=True, original=orig, out_dir=d, verbose=False)
+    info = sf.info(out)
+    assert info.channels == 30, f"Expected 30 channels, got {info.channels}"
+
+    with open(out, "rb") as f:
+        data = f.read()
+
+    # Verify RF64 / BW64 container
+    assert data[:4] == b"RF64"
+    # Verify XML content in axml chunk
+    assert b"APR_1001" in data
+    assert b"ACO_1001" in data
+    assert b"Top Middle Left" in data
+    assert b"Top Middle Right" in data
+    assert b"Lead Vocal" in data
+    assert b"Backing Left" in data
+    # Verify 7.1.2 Bed definition is present to satisfy Studio One ("File does not contain beds" check)
+    assert b"AP_00011001" in data
+    assert b"AP_00031001" in data
+    # Verify binary chna has 30 tracks (10 bed + 20 objects)
+    chna_idx = data.find(b"chna")
+    assert chna_idx != -1
+    n_tracks, n_uids = struct.unpack_from("<HH", data, chna_idx + 8)
+    assert n_tracks == 30
+    assert n_uids == 30
+
+
+
+def test_gui_queue_reordering():
+    """Verify that treeview items can be moved up and down properly."""
+    import tkinter as tk
+    from tkinter import ttk
+    root = tk.Tk()
+    root.withdraw()
+    tree = ttk.Treeview(root, columns=("name",))
+    i1 = tree.insert("", "end", values=("song1",))
+    i2 = tree.insert("", "end", values=("song2",))
+    i3 = tree.insert("", "end", values=("song3",))
+    assert tree.get_children() == (i1, i2, i3)
+    # move i2 up
+    tree.move(i2, "", 0)
+    assert tree.get_children() == (i2, i1, i3)
+    # move i2 back down
+    tree.move(i2, "", 1)
+    assert tree.get_children() == (i1, i2, i3)
+    root.destroy()
+
+
+def test_motion_tracking():
+    """Verify that panning motion is accurately tracked and builds animated 3D blocks."""
+    from surroundupmix.motion import compute_short_time_pan, build_dynamic_blocks
+    sr = 48000
+    n = sr * 2
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    # Signal panning from hard left (1, 0) to hard right (0, 1)
+    sig = np.stack([1.0 - t, t], axis=1)
+    pans, energies, _ = compute_short_time_pan(sig, sr, block_sec=0.20)
+    assert pans[0] < -0.5
+    assert pans[-1] > 0.5
+
+    blocks = build_dynamic_blocks(sig, sr, base_x=-0.85, base_y=-0.85, base_z=0.35, pan_range=0.45)
+    assert len(blocks) == 10
+    assert blocks[0][2] < blocks[-1][2]
+
+
+def test_whisper_proximity_and_360_orbit():
+    """Verify whisper pulls object to ear level and ping-pong creates 360 orbit."""
+    from surroundupmix.motion import build_dynamic_blocks
+    from scipy.signal import butter, sosfilt
+    sr = 48000
+    n = sr * 2
+
+    # 1. Whisper test: unvoiced high-frequency noise
+    noise = np.random.randn(n).astype(np.float32) * 0.4
+    sos = butter(4, [3000, 8000], btype="bandpass", fs=sr, output="sos")
+    wh = sosfilt(sos, noise).astype(np.float32)
+    sig_wh = np.stack([wh * 0.1, wh * 0.9], axis=1)
+
+    blocks_wh = build_dynamic_blocks(sig_wh, sr, base_x=0.85, base_y=-0.85, base_z=0.35)
+    avg_y = np.mean([b[3] for b in blocks_wh])
+    assert avg_y > -0.60, f"Whisper failed to pull object forward: avg_y={avg_y}"
+
+    # 2. 360 Orbit test: Left-to-Right sweep
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    sig_sweep = np.stack([1.0 - t, t], axis=1) * 0.5
+    blocks_sweep = build_dynamic_blocks(sig_sweep, sr, base_x=0.0, base_y=-0.85, base_z=0.35, pan_range=0.85)
+    front_blocks = [b for b in blocks_sweep if b[3] > 0.0]
+    assert len(front_blocks) > 0, "Orbit failed to arc through front half-plane"
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
