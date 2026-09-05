@@ -73,7 +73,7 @@ PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
 INSTRUMENTS = ("bass", "drums", "vocals", "other", "guitar", "piano", "backing")
 
 OUTPUT_DESC = {
-    "Dolby Atmos (20ch Objects)": "Modern Studio One & Atmos Renderer master: 14 fixed speaker anchors (7.1.6) + 6 dynamic moving 3D objects. Pure objects architecture (0 bed channels).",
+    "Dolby Atmos (20ch Objects)": "Studio One & Atmos master: 10-ch silent 7.1.2 bed carrier + 20 3D Audio Objects (14 fixed 7.1.6 speaker anchors + 6 dynamic moving objects).",
     "7.1.2": "10-channel 7.1.2 discrete WAV with stereo height speakers. Plays directly on Atmos-capable hardware.",
     "Dolby Atmos": "Self-contained 7.1.2 ADM BWF master (48 kHz) with moving 3D objects (Playback speaker bed order).",
     "ADM BWF": "Certified 7.1.2 ADM BWF master for Dolby Atmos Renderer, Studio One, Pro Tools, and DaVinci Resolve.",
