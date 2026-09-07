@@ -47,7 +47,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                  lfe_cross=None, norm_level=-1.0, force_wav=False, place=None,
                  overrides=None, split_vocals="off", split_python=None,
                  adm=False, adm_bits=24, adm_order="playback", adm_objects=False,
-                 adm_all_objects=False,
+                 adm_all_objects=False, motion_mode="dynamic", motion_intensity=1.0,
                  original=None, decorrelate=True, vocal_roles="auto", recover_detail=True,
                  recover_gain=0.0, binaural_amount=0.0, verbose=True):
     """Upmix a Demucs stems folder. Returns the output path.
@@ -284,7 +284,7 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
         # 2. Dynamic 3D Moving Objects (Channels 15-20)
         n_samples = chans.n
 
-        # Object 15 & 16: Backing Left & Right (Continuous 3D Motion + 360° Orbit)
+        # Object 15 & 16: Backing Left & Right (Full Rear Surround Arch + Orbit)
         bg_sig_l = np.zeros(n_samples, dtype=np.float32)
         bg_sig_r = np.zeros(n_samples, dtype=np.float32)
         if "backing" in stems:
@@ -293,13 +293,17 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
             bg_mul = db_to_lin(backing_gain_db + ov_bg.get("level", 0.0))
             bg_sig_l = bg_data[:, 0] * bg_mul
             bg_sig_r = bg_data[:, 1] * bg_mul
-            b_bg_l = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.50,
-                                          base_z=0.35, pan_range=0.45, orbit=True)
-            b_bg_r = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.50,
-                                          base_z=0.35, pan_range=0.45, orbit=True)
+            b_bg_l = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.60,
+                                          base_z=0.35, pan_range=0.45, orbit=True,
+                                          profile="backing", motion_mode=motion_mode,
+                                          intensity=motion_intensity)
+            b_bg_r = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.60,
+                                          base_z=0.35, pan_range=0.45, orbit=True,
+                                          profile="backing", motion_mode=motion_mode,
+                                          intensity=motion_intensity)
         else:
-            b_bg_l = [(0.0, n_samples / float(sr), -0.85, -0.50, 0.35)]
-            b_bg_r = [(0.0, n_samples / float(sr), 0.85, -0.50, 0.35)]
+            b_bg_l = [(0.0, n_samples / float(sr), -0.85, -0.60, 0.35)]
+            b_bg_r = [(0.0, n_samples / float(sr), 0.85, -0.60, 0.35)]
 
         all_obj_defs.append({"name": "Backing Left", "blocks": b_bg_l})
         all_obj_signals.append(bg_sig_l)
@@ -311,41 +315,47 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
         if "vocals" in stems:
             v_data = stems["vocals"].data
             voc_sig = 0.5 * (v_data[:, 0] + v_data[:, 1])
-            b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.70,
-                                         base_z=0.10, pan_range=0.35,
-                                         intimacy_proximity=True, pitch_elevation=True)
+            b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.85,
+                                         base_z=0.10, pan_range=0.20,
+                                         intimacy_proximity=True, pitch_elevation=True,
+                                         profile="vocal", motion_mode=motion_mode,
+                                         intensity=motion_intensity)
         else:
-            b_voc = [(0.0, n_samples / float(sr), 0.0, 0.70, 0.10)]
+            b_voc = [(0.0, n_samples / float(sr), 0.0, 0.85, 0.10)]
         all_obj_defs.append({"name": "Lead Vocal", "blocks": b_voc})
         all_obj_signals.append(voc_sig)
 
-        # Object 18: Guitar / Solo (Dynamic 3D Tracking & Solo Swirl)
+        # Object 18: Guitar / Solo (Side/Rear presence on rhythm, dynamic diagonal sweeps on solos)
         gtr_stem = stems.get("guitar", stems.get("other"))
         gtr_sig = np.zeros(n_samples, dtype=np.float32)
         if gtr_stem is not None:
             g_data = gtr_stem.data
             gtr_sig = g_data[:, 0] * 0.75
-            b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.60, base_y=0.40,
-                                         base_z=0.25, pan_range=0.50, orbit=True)
+            b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.75, base_y=-0.65,
+                                         base_z=0.25, pan_range=0.50, orbit=True,
+                                         profile="guitar", motion_mode=motion_mode,
+                                         intensity=motion_intensity)
         else:
-            b_gtr = [(0.0, n_samples / float(sr), -0.60, 0.40, 0.25)]
+            b_gtr = [(0.0, n_samples / float(sr), -0.75, -0.65, 0.25)]
         all_obj_defs.append({"name": "Guitar / Solo", "blocks": b_gtr})
         all_obj_signals.append(gtr_sig)
 
-        # Object 19: Piano / Synth / Texture (Stereo Width & Shimmering Height)
+        # Object 19: Piano / Synth / Texture (Expansive diagonal breathing, wide side/rear envelopment)
         pno_stem = stems.get("piano", stems.get("other"))
         pno_sig = np.zeros(n_samples, dtype=np.float32)
         if pno_stem is not None:
             p_data = pno_stem.data
             pno_sig = (p_data[:, 1] if p_data.shape[1] > 1 else p_data[:, 0]) * 0.75
-            b_pno = build_dynamic_blocks(p_data, sr, base_x=0.60, base_y=0.40,
-                                         base_z=0.25, pan_range=0.50, pitch_elevation=True)
+            b_pno = build_dynamic_blocks(p_data, sr, base_x=0.75, base_y=-0.50,
+                                         base_z=0.25, pan_range=0.50, pitch_elevation=True,
+                                         profile="keys", motion_mode=motion_mode,
+                                         intensity=motion_intensity)
         else:
-            b_pno = [(0.0, n_samples / float(sr), 0.60, 0.40, 0.25)]
+            b_pno = [(0.0, n_samples / float(sr), 0.75, -0.50, 0.25)]
         all_obj_defs.append({"name": "Piano / Synth", "blocks": b_pno})
         all_obj_signals.append(pno_sig)
 
-        # Object 20: Ear Candy / FX / Delay (Spatial Riser & 3D Delay Swirl)
+        # Object 20: Ear Candy / FX / Delay (Full 3D Room Traveler, Spiral Risers)
         fx_sig = np.zeros(n_samples, dtype=np.float32)
         fx_src = stems.get("residual", stems.get("other", stems.get("vocals")))
         if fx_src is not None:
@@ -354,11 +364,13 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                 fx_sig = 0.5 * (f_data[:, 0] - f_data[:, 1]) * 0.70
             else:
                 fx_sig = f_data.ravel() * 0.70
-            b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.60,
+            b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.50,
                                         base_z=0.60, pan_range=0.80, orbit=True,
-                                        pitch_elevation=True)
+                                        pitch_elevation=True, profile="fx",
+                                        motion_mode=motion_mode,
+                                        intensity=motion_intensity)
         else:
-            b_fx = [(0.0, n_samples / float(sr), 0.0, -0.60, 0.60)]
+            b_fx = [(0.0, n_samples / float(sr), 0.0, -0.50, 0.60)]
         all_obj_defs.append({"name": "Ear Candy / FX", "blocks": b_fx})
         all_obj_signals.append(fx_sig)
 
@@ -400,13 +412,17 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                 bg_data = stems["backing"].data
                 ov_bg = ov.get("backing", {})
                 bg_mul = db_to_lin(backing_gain_db + ov_bg.get("level", 0.0))
-                b_left = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.50,
-                                              base_z=0.35, pan_range=0.45, orbit=True)
+                b_left = build_dynamic_blocks(bg_data, sr, base_x=-0.85, base_y=-0.60,
+                                              base_z=0.35, pan_range=0.45, orbit=True,
+                                              profile="backing", motion_mode=motion_mode,
+                                              intensity=motion_intensity)
                 objects.append({"name": "Backing Left", "blocks": b_left})
                 object_signals.append(bg_data[:, 0] * bg_mul)
 
-                b_right = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.50,
-                                               base_z=0.35, pan_range=0.45, orbit=True)
+                b_right = build_dynamic_blocks(bg_data, sr, base_x=0.85, base_y=-0.60,
+                                               base_z=0.35, pan_range=0.45, orbit=True,
+                                               profile="backing", motion_mode=motion_mode,
+                                               intensity=motion_intensity)
                 objects.append({"name": "Backing Right", "blocks": b_right})
                 object_signals.append(bg_data[:, 1] * bg_mul)
 
@@ -414,32 +430,38 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
             if "vocals" in stems:
                 v_data = stems["vocals"].data
                 voc_sig = 0.5 * (v_data[:, 0] + v_data[:, 1])
-                b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.70,
-                                             base_z=0.10, pan_range=0.35,
-                                             intimacy_proximity=True, pitch_elevation=True)
+                b_voc = build_dynamic_blocks(v_data, sr, base_x=0.0, base_y=0.85,
+                                             base_z=0.10, pan_range=0.20,
+                                             intimacy_proximity=True, pitch_elevation=True,
+                                             profile="vocal", motion_mode=motion_mode,
+                                             intensity=motion_intensity)
                 objects.append({"name": "Lead Vocal", "blocks": b_voc})
                 object_signals.append(voc_sig)
 
-            # 4: Guitar / Solo
+            # 4: Guitar / Solo (Side/Rear presence on rhythm, dynamic diagonal sweeps on solos)
             gtr_stem = stems.get("guitar", stems.get("other"))
             if gtr_stem is not None:
                 g_data = gtr_stem.data
-                b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.60, base_y=0.40,
-                                             base_z=0.25, pan_range=0.50, orbit=True)
+                b_gtr = build_dynamic_blocks(g_data, sr, base_x=-0.75, base_y=-0.65,
+                                             base_z=0.25, pan_range=0.50, orbit=True,
+                                             profile="guitar", motion_mode=motion_mode,
+                                             intensity=motion_intensity)
                 objects.append({"name": "Guitar / Solo", "blocks": b_gtr})
                 object_signals.append(g_data[:, 0] * 0.75)
 
-            # 5: Piano / Synth / Texture
+            # 5: Piano / Synth / Texture (Expansive diagonal breathing, wide side/rear envelopment)
             pno_stem = stems.get("piano", stems.get("other"))
             if pno_stem is not None:
                 p_data = pno_stem.data
                 p_sig = (p_data[:, 1] if p_data.shape[1] > 1 else p_data[:, 0]) * 0.75
-                b_pno = build_dynamic_blocks(p_data, sr, base_x=0.60, base_y=0.40,
-                                             base_z=0.25, pan_range=0.50, pitch_elevation=True)
+                b_pno = build_dynamic_blocks(p_data, sr, base_x=0.75, base_y=-0.50,
+                                             base_z=0.25, pan_range=0.50, pitch_elevation=True,
+                                             profile="keys", motion_mode=motion_mode,
+                                             intensity=motion_intensity)
                 objects.append({"name": "Piano / Synth", "blocks": b_pno})
                 object_signals.append(p_sig)
 
-            # 6: Ear Candy / FX / Delay
+            # 6: Ear Candy / FX / Delay (Full 3D Room Traveler, Spiral Risers)
             fx_src = stems.get("residual", stems.get("other", stems.get("vocals")))
             if fx_src is not None:
                 f_data = fx_src.data
@@ -447,9 +469,11 @@ def upmix_folder(stems_folder, fmt="5.1", preset="immersive", out_dir=None,
                     fx_sig = 0.5 * (f_data[:, 0] - f_data[:, 1]) * 0.70
                 else:
                     fx_sig = f_data.ravel() * 0.70
-                b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.60,
+                b_fx = build_dynamic_blocks(f_data, sr, base_x=0.0, base_y=-0.50,
                                             base_z=0.60, pan_range=0.80, orbit=True,
-                                            pitch_elevation=True)
+                                            pitch_elevation=True, profile="fx",
+                                            motion_mode=motion_mode,
+                                            intensity=motion_intensity)
                 objects.append({"name": "Ear Candy / FX", "blocks": b_fx})
                 object_signals.append(fx_sig)
 

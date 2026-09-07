@@ -853,6 +853,37 @@ def test_whisper_proximity_and_360_orbit():
     assert len(front_blocks) > 0, "Orbit failed to arc through front half-plane"
 
 
+def test_full_room_spatial_trajectories():
+    """Verify that profiles explore full room depth (Y < 0 and Y > 0) and 3D volume."""
+    from surroundupmix.motion import build_dynamic_blocks
+    sr = 48000
+    n = sr * 14  # full cycle period
+    t = np.linspace(0, 1, n, dtype=np.float32)
+
+    # Guitar solo phrase: starts quiet, bursts with high energy
+    env = np.sin(np.pi * t) ** 2
+    sig_gtr = np.stack([env * np.sin(2 * np.pi * 440 * t), env * np.cos(2 * np.pi * 440 * t)], axis=1)
+    blocks_gtr = build_dynamic_blocks(sig_gtr, sr, base_x=-0.75, base_y=-0.65, profile="guitar")
+    ys_gtr = [b[3] for b in blocks_gtr]
+    # Verify guitar accesses both rear (Y < -0.40) and forward/sweeps (Y > -0.20)
+    assert min(ys_gtr) < -0.40, f"Guitar failed to sit in rear: min_y={min(ys_gtr)}"
+    assert max(ys_gtr) > -0.20, f"Guitar failed to sweep forward on solo: max_y={max(ys_gtr)}"
+
+    # FX spiral traveler: visits all 4 quadrants
+    sig_fx = np.random.randn(n, 2).astype(np.float32) * 0.3
+    blocks_fx = build_dynamic_blocks(sig_fx, sr, profile="fx", motion_mode="expressive")
+    xs_fx = [b[2] for b in blocks_fx]
+    ys_fx = [b[3] for b in blocks_fx]
+    assert min(xs_fx) < -0.5 and max(xs_fx) > 0.5, "FX failed to traverse X width"
+    assert min(ys_fx) < -0.5 and max(ys_fx) > 0.5, "FX failed to traverse Y depth"
+
+    # Verify all coordinates within valid boundaries
+    for _, _, x, y, z in blocks_gtr + blocks_fx:
+        assert -1.0 <= x <= 1.0
+        assert -1.0 <= y <= 1.0
+        assert 0.0 <= z <= 1.0
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:

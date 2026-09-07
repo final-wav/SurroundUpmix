@@ -51,8 +51,12 @@ def main(argv=None):
                     help="export split-out backing vocals as discrete 3D Atmos objects "
                          "instead of folding them into the 7.1.2 bed")
     ap.add_argument("--all-objects", action="store_true",
-                    help="write modern 20-channel All-Objects Dolby Atmos master "
-                         "(14 speaker anchors + 6 dynamic moving 3D objects, 0 bed channels)")
+                    help="write modern 30-channel Studio One & Atmos All-Objects master "
+                         "(10-ch silent bed carrier + 14 speaker anchors + 6 dynamic moving 3D objects)")
+    ap.add_argument("--motion-mode", default="dynamic", choices=["subtle", "dynamic", "expressive"],
+                    help="3D object motion behavior: subtle, dynamic (default), or expressive")
+    ap.add_argument("--motion-intensity", type=float, default=1.0,
+                    help="3D object motion depth multiplier (default 1.0)")
     ap.add_argument("--original", default=None,
                     help="path to the original master; HF air restore uses it to "
                          "reinject the highs the separator lost (always applied when given)")
@@ -100,6 +104,7 @@ def main(argv=None):
             force_wav=args.wav, place=place, adm=args.adm,
             adm_order=args.adm_order, adm_objects=args.adm_objects,
             adm_all_objects=args.all_objects,
+            motion_mode=args.motion_mode, motion_intensity=args.motion_intensity,
             original=args.original,
             decorrelate=(args.decorrelate == "on"),
             vocal_roles=args.vocal_roles,

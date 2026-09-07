@@ -110,6 +110,8 @@ TIPS = {
     "Binaural depth": "Translates binaural dummy-head ITD cues into dynamic front/back leaning.",
     "Vocal roles": "auto verifies which stem is true lead vs backing. keep/swap overrides.",
     "Atmos objects": "Exports backing vocals as discrete moving 3D audio objects with dynamic pan-tracking & 360° orbit!",
+    "Motion mode": "3D spatial motion behavior: dynamic (balanced sweeps & depth), expressive (maximum room traversal & solo rides), or subtle (conservative).",
+    "Motion intensity": "Scaling multiplier for 3D trajectory travel depth, diagonal distance, and height elevation.",
 }
 
 PLACE_TIP = ("Where each instrument is placed in the room.\n"
@@ -714,9 +716,15 @@ class App:
         ttk.Label(stat_box, text="● 360° Orbit & Whisper Active", foreground=OK,
                   font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(5, 0))
 
+        self.motion_mode = self._reg("motion_mode", self._combo(
+            page, "3D Motion Dynamics", ["dynamic", "expressive", "subtle"], "dynamic", 1, 0, TIPS["Motion mode"]))
+
+        self.motion_intensity = self._reg("motion_intensity", self._combo(
+            page, "Motion Travel Depth", ["1.0", "1.5", "2.0", "0.5"], "1.0", 1, 1, TIPS["Motion intensity"]))
+
         # Binaural depth slider
         brow = ttk.Frame(page)
-        brow.grid(row=1, column=0, columnspan=3, sticky="ew", padx=6, pady=(14, 2))
+        brow.grid(row=2, column=0, columnspan=3, sticky="ew", padx=6, pady=(14, 2))
         blab = ttk.Label(brow, text="Binaural Depth:", style="Muted.TLabel")
         blab.pack(side="left")
         self.binaural = self._reg("binaural", tk.DoubleVar(value=0))
@@ -1179,6 +1187,11 @@ class App:
             cmd += ["--adm", "--adm-order", "renderer"]
         if (atmos or admr) and hasattr(self, "adm_objects") and self.adm_objects.get() == "on":
             cmd += ["--adm-objects"]
+        if (all_obj or ((atmos or admr) and hasattr(self, "adm_objects") and self.adm_objects.get() == "on")):
+            if hasattr(self, "motion_mode") and self.motion_mode.get():
+                cmd += ["--motion-mode", self.motion_mode.get()]
+            if hasattr(self, "motion_intensity") and self.motion_intensity.get():
+                cmd += ["--motion-intensity", self.motion_intensity.get()]
 
         return cmd
 

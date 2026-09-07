@@ -1,13 +1,16 @@
 """Dynamic 3D trajectory generation and psychoacoustic motion engine for Dolby Atmos objects.
 
 Features:
-1. Short-Time Pan Tracking: Reconstructs real L/R panning automation over time.
-2. 360° Orbit & Swirl: Translates fast panning / ping-pong delays into seamless 360°
-   circular orbits around the listener's head.
-3. Intimacy & Whisper Proximity: Detects dry unvoiced whisper / breath cues and pulls
-   the object from the rear directly next to the listener's ear (ASMR goosebumps effect).
-4. Pitch-to-Elevation: High shimmering frequencies (chimes, sparkles, high synths)
-   dynamically elevate towards the ceiling speakers.
+1. Full-Room 3D Spatial Trajectories: Objects naturally utilize the full room volume
+   (Front, Sides, Rear corners, and Heights) across X, Y in [-1.0, 1.0] and Z in [0.0, 1.0].
+2. Profile-Aware Musical Motion:
+   - "guitar": Deep side/rear accompaniment with energetic solo sweeps and diagonal glides.
+   - "keys": Expansive diagonal breathing, wide side/rear envelopment, and shimmer elevation.
+   - "backing": Rear surround arch with chorus expansion and 360° vocal orbit.
+   - "vocal": Front center anchor with intimate whisper proximity and pitch elevation.
+   - "fx": Full 3D room traveler (spiral risers, corner-to-corner delay sweeps).
+3. Song-Synchronized Trajectory Curves: Smooth phrase modulation driven by energy onsets,
+   spectral brightness, and panning dynamics.
 """
 import numpy as np
 
@@ -117,88 +120,185 @@ def compute_short_time_pan(data, sr, block_sec=0.20, gate_db=-60.0):
     return pans, energies, max(1, int(sr * block_sec))
 
 
-def build_dynamic_blocks(data, sr, base_x, base_y, base_z, block_sec=0.20,
-                         pan_range=0.45, z_lift=0.15,
-                         orbit=True, intimacy_proximity=True, pitch_elevation=True):
-    """Build [(rtime, duration, x, y, z), ...] blocks with psychoacoustic 3D motion.
+def build_dynamic_blocks(data, sr, base_x=0.0, base_y=0.0, base_z=0.25, block_sec=0.20,
+                         pan_range=0.50, z_lift=0.20,
+                         orbit=True, intimacy_proximity=True, pitch_elevation=True,
+                         profile="auto", motion_mode="dynamic", intensity=1.0):
+    """Build [(rtime, duration, x, y, z), ...] blocks with psychoacoustic full-room 3D motion.
 
-    base_x: nominal resting X position (-0.85 Left, +0.85 Right, 0.0 Center)
-    base_y: resting Y position (e.g. -0.85 for rear envelope)
-    base_z: resting Z position (e.g. 0.35 elevated)
-    pan_range: how far the object moves laterally in reaction to stereo pan
-    z_lift: dynamic elevation increase during energetic phrases
-    orbit: whether active panning / ping-pong delays curve into 360° circular orbits
-    intimacy_proximity: whether whispers/intimate breath pull the object near the ear
-    pitch_elevation: whether high shimmering frequencies float towards the ceiling
+    base_x: nominal resting X position (-1.0 Left to +1.0 Right)
+    base_y: resting Y position (-1.0 Rear to +1.0 Front)
+    base_z: resting Z position (0.0 Floor to 1.0 Ceiling)
+    profile: "guitar", "keys", "backing", "vocal", "fx", "auto"
+    motion_mode: "subtle", "dynamic" (default), "expressive"
+    intensity: motion depth scaling multiplier (default 1.0)
     """
     pans, energies, vels, intimacies, centroids, peakinesses = compute_short_time_features(
         data, sr, block_sec=block_sec)
     n = len(data)
     total_sec = n / float(sr)
     num_blocks = len(pans)
-    blocks = []
+    if num_blocks == 0:
+        return [(0.0, total_sec, base_x, base_y, base_z)]
 
     max_e = float(np.max(energies)) if len(energies) and np.max(energies) > 1e-6 else 1.0
 
-    for i in range(num_blocks):
-        rt = i * block_sec
-        dur = min(block_sec, total_sec - rt)
-        if dur <= 0:
-            break
+    # Motion mode scaling
+    mode_scale = 1.0
+    if motion_mode == "subtle":
+        mode_scale = 0.50
+    elif motion_mode == "expressive":
+        mode_scale = 1.50
+    eff_intensity = float(np.clip(intensity * mode_scale, 0.0, 2.5))
 
+    # Compute energy envelope onsets and smoothed dynamic curve
+    energy_env = energies / max_e
+    if num_blocks >= 5:
+        # Smooth energy tracking for phrase progression
+        e_kernel = np.ones(5, dtype=np.float32) / 5.0
+        energy_smooth = np.convolve(energy_env, e_kernel, mode="same")
+    else:
+        energy_smooth = energy_env
+
+    # Detect onsets / energy bursts
+    onsets = np.zeros(num_blocks, dtype=np.float32)
+    if num_blocks >= 2:
+        onsets[1:] = np.maximum(0.0, energy_env[1:] - energy_env[:-1])
+
+    # Musical phrase slow drift accumulator (cycles over ~12-16 seconds)
+    cycle_period_sec = 14.0
+    t_blocks = np.arange(num_blocks, dtype=np.float32) * block_sec
+    phrase_phase = (2.0 * np.pi * t_blocks / cycle_period_sec)
+
+    raw_x = np.zeros(num_blocks, dtype=np.float32)
+    raw_y = np.zeros(num_blocks, dtype=np.float32)
+    raw_z = np.zeros(num_blocks, dtype=np.float32)
+
+    for i in range(num_blocks):
         p = float(pans[i])
         vel = float(vels[i])
         intim = float(intimacies[i])
         cent = float(centroids[i])
         peak = float(peakinesses[i])
-        rel_e = float(energies[i] / max_e) if max_e > 0 else 0.0
+        e = float(energy_smooth[i])
+        ons = float(onsets[i])
+        ph = float(phrase_phase[i])
 
-        # 1. Resting Coordinates
-        x_rest = float(np.clip(base_x + p * pan_range, -1.0, 1.0))
-        y_rest = float(base_y)
+        # Default resting coordinates
+        x = base_x + p * pan_range * eff_intensity
+        y = base_y
+        z = base_z + e * z_lift * eff_intensity
 
-        x = x_rest
-        y = y_rest
+        # -------------------------------------------------------------
+        # PROFILE-SPECIFIC FULL-ROOM 3D TRAJECTORY ENGINES
+        # -------------------------------------------------------------
 
-        # Feature A: 360° Orbit Mode on Active Panning (Ping-Pong / Sweeps)
-        if orbit:
-            # When sound is actively moving across the stereo stage (|velocity| > 0.35 / sec)
-            motion_speed = float(np.clip((abs(vel) - 0.35) * 1.6, 0.0, 1.0))
+        if profile == "guitar":
+            # Guitar Profile: Side/Rear corner presence on rhythm, dynamic diagonal sweeps on solos
+            # Base resting zone: deep left or right (e.g. base_x ~ -0.75, base_y ~ -0.65)
+            # 1. Depth modulation: High energy (solos, riffs) pushes forward along diagonal; rhythm sits deep rear
+            y_depth_sweep = -0.70 + (e * 0.85 + ons * 0.40) * eff_intensity
+            # 2. Diagonal drift across musical phrases
+            x_diag_drift = base_x + 0.35 * np.sin(ph) * eff_intensity + p * 0.40
+            y_diag_drift = y_depth_sweep + 0.25 * np.cos(ph) * eff_intensity
+
+            x = x_diag_drift
+            y = y_diag_drift
+            # Solo elevation on screaming notes (bends / high harmonics)
+            if cent > 2000.0:
+                z += float(np.clip((cent - 2000.0) / 3500.0, 0.0, 0.45)) * eff_intensity
+
+        elif profile == "keys":
+            # Piano / Keys / Synth: Expansive diagonal breathing, wide side/rear envelopment, shimmer lift
+            # Base resting zone: side/rear right (base_x ~ +0.75, base_y ~ -0.50)
+            x_drift = base_x + 0.30 * np.cos(ph) * eff_intensity + p * 0.40
+            y_drift = -0.55 + 0.45 * np.sin(ph * 0.7) * eff_intensity + (e * 0.30)
+            x = x_drift
+            y = y_drift
+            # Shimmering height on bright synth filters and high arpeggios
+            if cent > 2200.0 and peak >= 20.0:
+                high_factor = float(np.clip((cent - 2200.0) / 4000.0, 0.0, 0.50))
+                z += high_factor * eff_intensity
+
+        elif profile == "backing":
+            # Backing Vocals: Rear surround arch with chorus expansion and 360° orbit
+            # Base resting zone: rear surround (base_x ~ +-0.85, base_y ~ -0.60)
+            # Expands along side walls towards front when chorus/energy swells
+            y_arch = base_y + (e * 0.50 + ons * 0.25) * eff_intensity
+            x_arch = base_x * (1.0 + 0.20 * np.sin(ph * 0.5)) + p * 0.30
+            x = x_arch
+            y = y_arch
+            z = base_z + (e * 0.30) * eff_intensity
+
+        elif profile == "vocal":
+            # Lead Vocal: Stable Front Center anchor with whisper near-field proximity
+            x = base_x + p * 0.15 * eff_intensity   # subtle micro-sway, strictly centered
+            y = base_y
+            z = base_z
+            # Pitch elevation on high belted notes
+            if cent > 2800.0 and e > 0.3:
+                z += float(np.clip((cent - 2800.0) / 3000.0, 0.0, 0.35)) * eff_intensity
+
+        elif profile == "fx":
+            # Ear Candy / FX: Full 3D room traveler (spiral risers, corner-to-corner delay sweeps)
+            r_orbit = 0.85 * eff_intensity
+            x = float(np.clip(r_orbit * np.sin(ph * 1.5) + p * 0.5, -1.0, 1.0))
+            y = float(np.clip(r_orbit * np.cos(ph * 1.5), -1.0, 1.0))
+            z = 0.30 + 0.50 * np.abs(np.sin(ph * 0.75)) * eff_intensity
+
+        else: # "auto" / generic
+            # Blend base coordinates with energy depth breathing
+            y_travel = base_y + (e * 0.40 * (1.0 if base_y < 0 else -0.30)) * eff_intensity
+            x = base_x + p * pan_range * eff_intensity
+            y = y_travel
+
+        # -------------------------------------------------------------
+        # UNIVERSAL PSYCHOACOUSTIC OVERLAYS
+        # -------------------------------------------------------------
+
+        # Overlay 1: 360° Orbit Mode on Active Panning (Ping-Pong / Sweeps)
+        if orbit and abs(vel) > 0.30:
+            motion_speed = float(np.clip((abs(vel) - 0.30) * 1.8, 0.0, 1.0)) * eff_intensity
             if motion_speed > 0:
-                # Full 360° circular orbit around listener: X^2 + Y^2 = R^2 (R ~ 0.85)
-                # Left -> Right (vel > 0): Arcs across the Front wall (Y > 0)
-                # Right -> Left (vel < 0): Arcs across the Rear wall (Y < 0)
                 r_circ = 0.85
                 x_orbit = float(np.clip(p * r_circ, -r_circ, r_circ))
                 y_circ_mag = float(np.sqrt(max(0.01, r_circ ** 2 - x_orbit ** 2)))
                 y_orbit = y_circ_mag if vel >= 0 else -y_circ_mag
+                x = (1.0 - motion_speed) * x + motion_speed * x_orbit
+                y = (1.0 - motion_speed) * y + motion_speed * y_orbit
 
-                x = (1.0 - motion_speed) * x_rest + motion_speed * x_orbit
-                y = (1.0 - motion_speed) * y_rest + motion_speed * y_orbit
-
-        # Feature B: Intimacy & Whisper Near-Field Proximity
-        if intimacy_proximity and intim > 0.05:
-            # Whisper pulls the object right next to the listener's ear/shoulder (Y ~ -0.10)
+        # Overlay 2: Intimacy & Whisper Near-Field Proximity (pulls directly to ear for vocals)
+        if intimacy_proximity and intim > 0.05 and profile in ("vocal", "auto"):
             y_ear = -0.10
             y = (1.0 - intim) * y + intim * y_ear
-
-        x = float(np.clip(x, -1.0, 1.0))
-        y = float(np.clip(y, -1.0, 1.0))
-
-        # 3. Elevation Z Coordinate
-        z = base_z + rel_e * z_lift
-
-        # Feature C: Pitch-to-Elevation (High shimmering tones float towards ceiling)
-        if pitch_elevation and cent > 2500.0 and peak >= 25.0:
-            high_factor = float(np.clip((cent - 2500.0) / 4500.0, 0.0, 1.0))
-            z += high_factor * 0.30
-
-        # Whispers settle to direct ear level (Z ~ 0.05)
-        if intimacy_proximity and intim > 0.05:
             z = (1.0 - intim) * z + intim * 0.05
 
-        z = float(np.clip(z, 0.0, 1.0))
+        # Overlay 3: High Shimmering Pitch Elevation
+        if pitch_elevation and cent > 3000.0 and peak >= 25.0 and profile != "guitar" and profile != "keys":
+            high_factor = float(np.clip((cent - 3000.0) / 4000.0, 0.0, 0.35)) * eff_intensity
+            z += high_factor
 
-        blocks.append((rt, dur, x, y, z))
+        raw_x[i] = float(np.clip(x, -1.0, 1.0))
+        raw_y[i] = float(np.clip(y, -1.0, 1.0))
+        raw_z[i] = float(np.clip(z, 0.0, 1.0))
+
+    # -----------------------------------------------------------------
+    # TRAJECTORY SMOOTHING (Ensures fluid motion without jitter)
+    # -----------------------------------------------------------------
+    if num_blocks >= 3:
+        t_kernel = np.array([0.20, 0.60, 0.20], dtype=np.float32)
+        smooth_x = np.convolve(raw_x, t_kernel, mode="same")
+        smooth_y = np.convolve(raw_y, t_kernel, mode="same")
+        smooth_z = np.convolve(raw_z, t_kernel, mode="same")
+    else:
+        smooth_x, smooth_y, smooth_z = raw_x, raw_y, raw_z
+
+    blocks = []
+    for i in range(num_blocks):
+        rt = i * block_sec
+        dur = min(block_sec, total_sec - rt)
+        if dur <= 0:
+            break
+        blocks.append((rt, dur, float(smooth_x[i]), float(smooth_y[i]), float(smooth_z[i])))
 
     return blocks
