@@ -13,7 +13,15 @@ import shutil
 import subprocess
 import sys
 
-# Suppress unauthenticated HF Hub warning (processing is 100% local)
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# Force UTF-8 encoding for Python and subprocesses (Demucs, audio-separator) on Windows
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["PYTHONUTF8"] = "1"
 os.environ["HF_HUB_VERBOSITY"] = "error"
 
 from surroundupmix.engine import upmix_folder
@@ -25,7 +33,10 @@ PLACE_ZONES = ["auto", "front", "side", "rear"]
 
 
 def run(cmd, **kw):
-    print("  $", " ".join(cmd))
+    try:
+        print("  $", " ".join(cmd))
+    except Exception:
+        print("  $", " ".join(cmd).encode("ascii", "replace").decode("ascii"))
     return subprocess.run(cmd, **kw)
 
 

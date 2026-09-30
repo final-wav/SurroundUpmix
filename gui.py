@@ -20,6 +20,15 @@ import sys
 import tempfile
 import threading
 
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+os.environ["PYTHONIOENCODING"] = "utf-8"
+os.environ["PYTHONUTF8"] = "1"
+
 import tkinter as tk
 from tkinter import filedialog, ttk
 
@@ -1248,9 +1257,12 @@ class App:
     def _run_one(self, cmd, base):
         try:
             self.q.put(("progress", 0))
+            sub_env = dict(os.environ)
+            sub_env["PYTHONIOENCODING"] = "utf-8"
+            sub_env["PYTHONUTF8"] = "1"
             self.proc = subprocess.Popen(
                 cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, bufsize=1, cwd=HERE)
+                text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=HERE, env=sub_env)
 
             current_step = "Processing"
             for line in self.proc.stdout:

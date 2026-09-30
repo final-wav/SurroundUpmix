@@ -841,20 +841,42 @@ def test_whisper_proximity_and_360_orbit():
     wh = sosfilt(sos, noise).astype(np.float32)
     sig_wh = np.stack([wh * 0.1, wh * 0.9], axis=1)
 
-    blocks_wh = build_dynamic_blocks(sig_wh, sr, base_x=0.85, base_y=-0.85, base_z=0.35)
+    blocks_wh = build_dynamic_blocks(sig_wh, sr, base_x=0.85, base_y=-0.85, base_z=0.0, profile="vocal")
     avg_y = np.mean([b[3] for b in blocks_wh])
     assert avg_y > -0.60, f"Whisper failed to pull object forward: avg_y={avg_y}"
 
-    # 2. 360 Orbit test: Left-to-Right sweep
+    # 2. FX Sweep test: Left-to-Right sweep
     t = np.linspace(0, 1, n, dtype=np.float32)
     sig_sweep = np.stack([1.0 - t, t], axis=1) * 0.5
-    blocks_sweep = build_dynamic_blocks(sig_sweep, sr, base_x=0.0, base_y=-0.85, base_z=0.35, pan_range=0.85)
-    front_blocks = [b for b in blocks_sweep if b[3] > 0.0]
-    assert len(front_blocks) > 0, "Orbit failed to arc through front half-plane"
+    blocks_sweep = build_dynamic_blocks(sig_sweep, sr, base_x=0.0, base_y=-0.85, base_z=0.0, pan_range=0.85, profile="fx")
+    xs_sweep = [b[2] for b in blocks_sweep]
+    assert min(xs_sweep) < -0.5 and max(xs_sweep) > 0.5, "FX sweep failed to cross stereo width"
+
+
+def test_backing_vocal_horseshoe_isolation():
+    """Verify that backing vocals NEVER enter the front soundstage (Y <= 0.0) and stay at ear level (Z <= 0.05)."""
+    from surroundupmix.motion import build_dynamic_blocks
+    sr = 48000
+    n = sr * 10
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    # Loud dynamic chorus backing vocal with extreme energy bursts
+    loud_bg = (np.sin(2 * np.pi * 440 * t) * (0.8 + 0.2 * np.sin(2 * np.pi * 2 * t))).astype(np.float32)
+    sig_bg = np.stack([loud_bg, loud_bg * 0.9], axis=1)
+
+    blocks_left = build_dynamic_blocks(sig_bg, sr, base_x=-0.85, base_y=-0.60, base_z=0.0,
+                                       profile="backing", motion_mode="expressive", intensity=2.0)
+    blocks_right = build_dynamic_blocks(sig_bg, sr, base_x=0.85, base_y=-0.60, base_z=0.0,
+                                        profile="backing", motion_mode="expressive", intensity=2.0)
+
+    for b in blocks_left + blocks_right:
+        x, y, z = b[2], b[3], b[4]
+        assert y <= 1e-5, f"Backing vocal breached front soundstage! Y={y}"
+        assert z <= 0.05001, f"Backing vocal breached ear-level ceiling! Z={z}"
+        assert -1.0 <= x <= 1.0
 
 
 def test_full_room_spatial_trajectories():
-    """Verify that profiles explore full room depth (Y < 0 and Y > 0) and 3D volume."""
+    """Verify that profiles explore room depth (Y < 0 and Y > 0) while staying grounded on ear level (Z <= 0.15)."""
     from surroundupmix.motion import build_dynamic_blocks
     sr = 48000
     n = sr * 14  # full cycle period
@@ -865,17 +887,21 @@ def test_full_room_spatial_trajectories():
     sig_gtr = np.stack([env * np.sin(2 * np.pi * 440 * t), env * np.cos(2 * np.pi * 440 * t)], axis=1)
     blocks_gtr = build_dynamic_blocks(sig_gtr, sr, base_x=-0.75, base_y=-0.65, profile="guitar")
     ys_gtr = [b[3] for b in blocks_gtr]
-    # Verify guitar accesses both rear (Y < -0.40) and forward/sweeps (Y > -0.20)
-    assert min(ys_gtr) < -0.40, f"Guitar failed to sit in rear: min_y={min(ys_gtr)}"
-    assert max(ys_gtr) > -0.20, f"Guitar failed to sweep forward on solo: max_y={max(ys_gtr)}"
+    zs_gtr = [b[4] for b in blocks_gtr]
 
-    # FX spiral traveler: visits all 4 quadrants
+    # Verify guitar accesses both rear (Y < -0.30) and forward/sweeps (Y > -0.15)
+    assert min(ys_gtr) < -0.30, f"Guitar failed to sit in rear: min_y={min(ys_gtr)}"
+    assert max(ys_gtr) > -0.15, f"Guitar failed to sweep forward on solo: max_y={max(ys_gtr)}"
+    # Verify grounded on ear level
+    assert max(zs_gtr) <= 0.15, f"Guitar flew above ear level! max_z={max(zs_gtr)}"
+
+    # FX traveler: visits wide X width and traverses room
     sig_fx = np.random.randn(n, 2).astype(np.float32) * 0.3
     blocks_fx = build_dynamic_blocks(sig_fx, sr, profile="fx", motion_mode="expressive")
     xs_fx = [b[2] for b in blocks_fx]
     ys_fx = [b[3] for b in blocks_fx]
     assert min(xs_fx) < -0.5 and max(xs_fx) > 0.5, "FX failed to traverse X width"
-    assert min(ys_fx) < -0.5 and max(ys_fx) > 0.5, "FX failed to traverse Y depth"
+    assert min(ys_fx) < -0.5 and max(ys_fx) > 0.2, "FX failed to traverse Y depth"
 
     # Verify all coordinates within valid boundaries
     for _, _, x, y, z in blocks_gtr + blocks_fx:

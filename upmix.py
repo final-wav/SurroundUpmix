@@ -9,6 +9,12 @@ backing/vocals_full from a karaoke split) as .flac or .wav.
 import argparse
 import sys
 
+if sys.platform == "win32":
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 from surroundupmix.engine import upmix_folder
 from surroundupmix.presets import PRESETS, DEFAULT_PRESET
 
