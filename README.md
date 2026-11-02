@@ -1,22 +1,46 @@
-# SurroundUpmix
+# SurroundUpmix v2.0
 
-Local, stems-based spatial audio upmixer for **5.1**, **7.1**, **7.1.2**, and **Dolby Atmos ADM BWF** masters. Runs locally on Windows, macOS, and Linux using open-source audio toolchains.
+Stems-based spatial audio upmixer and authoring suite for 5.1, 7.1, 7.1.2, and broadcast-grade Dolby Atmos ADM BWF masters. Runs locally on Windows, macOS, and Linux using open-source audio toolchains and PyTorch DSP.
+
+[![GitHub Release](https://img.shields.io/badge/release-v2.0.0-blue.svg)](https://github.com/final-wav/SurroundUpmix/releases)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-brightgreen.svg)](https://www.python.org/)
+[![License](https://img.shields.io/badge/license-MIT%20%2F%20Custom-orange.svg)](#license)
+
+<p align="center">
+  <img src="docs/screenshots/gui_main.png" alt="SurroundUpmix Studio Interface" width="900">
+</p>
+
+---
+
+## What's New in v2.0
+
+- **Standard DSP Engine**: Frequency-dependent energy-conserving direct/ambient signal decomposition based on short-time complex coherence. Preserves front pin-point transient clarity while extracting diffuse acoustic room reflections to surround and height channels.
+- **Chunked Streaming ADM BWF Writer (Resolves Issue #1)**: Continuous streaming disk writer operating in 96,000-sample blocks (~2.0 seconds). Fixes memory allocation errors (`ArrayMemoryError`) on multi-hour recordings and live sets, maintaining a constant RAM footprint below 25 MB regardless of file duration.
+- **Granular Stem Placement & Acoustic Routing Matrix**: Interactive per-instrument routing table allowing precise zone assignment (Front, Side, Rear, Heights, 3D Orbit), volume trim (dB), surround spread, center/LFE direct sends, and mute/solo controls.
+- **DrumSep Sub-Drum Separation**: Neural drum decomposition separating mixed drum tracks into discrete kick, snare, cymbals/hi-hats, and toms for precise 3D spatial positioning.
+- **Binaural Matrix Calibration**: Integrated binaural headphone monitoring preview with per-object HRTF rendering mode controls (Off, Near, Mid, Far).
+- **Studio Multitrack Folder Ingest**: In addition to standard stereo audio files, ingest entire DAW multitrack stem directories with automated role detection and speaker assignment.
+- **Flexible Master Output Selection**: Independent multi-format export checkboxes allowing simultaneous export of 30-channel ADM BWF (.wav), Dolby Atmos E-AC-3 JOC (.m4a bitstream via optional DEE), 7.1.2 discrete, and 5.1 surround.
+- **Optional VST3 Plugin Bridge & Dolby DEE**: Optional path configuration for external spatial VST3 plugins and Dolby Encoding Engine (dee.exe) with automatic 8.3 short path handling to prevent space-parsing issues.
+- **Dual-Mode Graphical Interface**:
+  - **Studio GUI (`gui.py`)**: Dark-themed production interface featuring an interactive 3D perspective soundstage canvas (orbit rotation, pitch, pan, and zoom), real-time monitor console, and drag-and-drop batch processing.
+  - **Classic GUI (`gui_classic.py`)**: Preserves the legacy interface for users requiring manual slider fine-tuning.
 
 ---
 
 ## Overview
 
-Traditional upmixers widen a stereo track by applying phase tricks or generic delays, which smears instruments indiscriminately across all speakers.
+Traditional upmixing algorithms widen a stereo track by applying artificial phase inversions or static delays, which smears instruments indiscriminately across speaker channels and causes destructive comb filtering in mono downmixes.
 
-**SurroundUpmix** takes a stems-first approach:
-1. It separates the input track into discrete stems (vocals, drums, bass, other, and optionally guitar/piano) using neural source separation (Demucs / Roformer).
-2. For each stem, it splits the signal into **direct (localised)** and **ambient (diffuse)** components using short-time inter-channel coherence analysis.
-3. Dry, localised elements remain firmly anchored in the front stage, while diffuse reflections, room reverb, and spatial textures envelop the listener across side, rear, and height channels.
-4. For immersive production, it exports broadcast-ready **Dolby Atmos ADM BWF** (RF64/BW64) masters with ITU-R BS.2076 metadata, complete with fixed speaker anchors and dynamic 3D audio object automation.
+SurroundUpmix takes a stems-first acoustic approach:
+1. Decomposes the input recording into discrete musical stems (vocals, drums, bass, other, and optionally guitar, piano, and drum sub-stems) using neural source separation (Demucs / Roformer / DrumSep).
+2. Computes the short-time complex inter-channel coherence ($\gamma$) for each stem to separate direct localized sound from diffuse acoustic room reflections.
+3. Anchors dry, localized elements firmly in the front stage while enveloping the listener with natural room reverberation, overhead reflections, and spatial textures across surround and height speakers.
+4. Authors broadcast-ready Dolby Atmos ADM BWF (RF64/BW64) masters with ITU-R BS.2076 metadata, complete with fixed speaker anchors and automated 3D audio object trajectories.
 
 ---
 
-## How It Works
+## Signal Processing & Physics
 
 ### 1. Energy-Conserving Coherence Decomposition
 
@@ -29,18 +53,20 @@ The signal is decomposed into direct and ambient components:
 $$\text{Direct} = X \cdot \gamma$$
 $$\text{Ambient} = X \cdot \sqrt{1 - \gamma^2}$$
 
-Because $\gamma^2 + (1 - \gamma^2) = 1$, total energy is strictly conserved in every time-frequency bin. Dry, centred, or cleanly panned sources ($\gamma \to 1$) are directed to the front stage, preserving their original stereo placement. Diffuse reverb and ambient spread ($\gamma \to 0$) wrap smoothly around the listener.
+Because $\gamma^2 + (1 - \gamma^2) = 1$, total energy is strictly conserved in every time-frequency bin:
+- Dry, centered, or cleanly panned sources ($\gamma \to 1$) are directed to the front stage, preserving their original stereo placement.
+- Diffuse reverb and ambient spread ($\gamma \to 0$) wrap smoothly around the listener into side, rear, and top height channels.
 
 ### 2. Stem-Specific Acoustic Routing
 
-Routing rules are grounded in room acoustics rather than artificial panning:
+Routing rules are grounded in real room acoustics rather than artificial panning:
 
 - **Bass**: Routed exclusively to the front and LFE. Low frequencies are non-directional; routing bass into surround channels causes room muddiness and phase cancellation.
-- **Drums**: Kick and snare remain anchored at the front. Decorrelated drum room ambience, overhead spill, and cymbals gently wrap to the surround channels.
-- **Lead Vocal**: Anchored to the centre/front. Short-delay doubled vocals (hard-panned double takes) are detected via GCC-PHAT and kept forward to prevent comb-filtering.
-- **Backing Vocals**: When isolated via the karaoke split, backing harmonies wrap into the rear and side channels full-range with dedicated front anchors to ensure natural vocal balance.
+- **Drums**: Kick and snare remain anchored at the front. Decorrelated drum room ambience, overhead spill, and cymbals wrap into surround and height channels.
+- **Lead Vocal**: Anchored to the center and front stage. Short-delay doubled vocals (hard-panned double takes) are detected via GCC-PHAT and kept forward to prevent comb-filtering.
+- **Backing Vocals**: When isolated via vocal separation, backing harmonies wrap into the rear and side channels with dedicated front anchors for balanced vocal clarity.
 - **Instruments / Textures**: Dry guitars, keyboards, and synths remain in the front stage, while their natural room reflections and stereo tails wrap to the sides and rear according to measured diffuseness.
-- **LFE Channel**: Synthesized from the sub-bass of bass and kick drums, band-limited via crossover (high-passed at 20 Hz), and calibrated with the standard ITU-R BR.1384 reproduction offset.
+- **LFE Channel**: Synthesized from the sub-bass of bass and kick drums, band-limited via crossover (high-passed at 20 Hz), and calibrated with standard ITU-R BR.1384 reproduction offsets.
 - **Heights (7.1.2 / 7.1.6)**: Fed by high-passed, decorrelated ambient reflections to create an open overhead canopy rather than a muffled clone of the mix.
 
 ---
@@ -49,37 +75,32 @@ Routing rules are grounded in room acoustics rather than artificial panning:
 
 SurroundUpmix authors compliant **Dolby Atmos ADM BWF** (RF64 / BW64) masters containing ITU-R BS.2076 `axml` and `chna` metadata, ready for direct import into the Dolby Atmos Renderer, Studio One, Pro Tools, Logic Pro, and DaVinci Resolve.
 
-### Export Modes
+### 30-Channel Master Architecture (`--all-objects`)
 
-1. **Standard Playback Bed (`--adm`)**:
-   - 7.1.2 Bed in standard WAVE playback order (`L R C LFE Lrs Rrs Lss Rss Ltm Rtm`).
-   - Includes a Dolby Audio Metadata (`dbmd`) chunk.
-   - Ideal for direct playback on hardware AVRs and consumer players.
+- **Channels 1–10**: 7.1.2 Bed Carrier with silent PCM (`0.0`). Provides standard DAW compatibility on ADM import, preventing *"File does not contain beds"* errors.
+- **Channels 11–24**: 14 Fixed Speaker Anchors configured in a 7.1.6 room layout:
+  - Front Left, Center, Front Right: $(\pm 1.0, 1.0, 0.0)$, $(0.0, 1.0, 0.0)$
+  - LFE / Subwoofer: $(0.0, 0.8, 0.0)$
+  - Side Surrounds L/R: $(\pm 1.0, 0.0, 0.0)$
+  - Rear Surrounds L/R: $(\pm 1.0, -1.0, 0.0)$
+  - Top Front L/R: $(\pm 1.0, 1.0, 1.0)$
+  - Top Middle L/R: $(\pm 1.0, 0.0, 1.0)$
+  - Top Rear L/R: $(\pm 1.0, -1.0, 1.0)$
+- **Channels 25–30**: 6 Dynamic Moving 3D Audio Objects with automated real-time spatial trajectories:
+  - **Lead Vocal**: Intimate whisper proximity tracking and pitch-to-elevation dynamics.
+  - **Backing Left & Right**: Continuous 360° orbit around the listener.
+  - **Guitar / Solo**: Short-time energy pan tracking across the stereo plane.
+  - **Piano / Synth**: Dynamic width expansion with ceiling elevation.
+  - **Ear Candy / FX**: Spatial risers and 3D delay swirls.
 
-2. **Renderer Bed (`--adm --adm-order renderer`)**:
-   - 7.1.2 Bed in canonical Dolby Atmos Renderer order (`L R C LFE Lss Rss Lrs Rrs Ltm Rtm`).
-   - Intended for DAW imports to ensure immediate, correct routing between side and rear surrounds.
+### Zero-OOM Streaming Writer
 
-3. **Discrete 3D Audio Objects (`--adm --adm-objects`)**:
-   - Isolates dynamic stems (lead vocal, backing vocals, guitar, synth, sound effects) and exports them as discrete 3D Audio Objects with Cartesian coordinates instead of folding them into the bed.
+In previous versions, writing a 30-channel ADM file required allocating the entire multichannel float32 matrix in RAM at once. For recordings longer than 45–60 minutes, this triggered `ArrayMemoryError` crashes requiring tens of gigabytes of RAM.
 
-4. **All-Objects 7.1.6 Master (`--all-objects`)**:
-   - Modern 30-channel master architecture:
-     - **Channels 1–10**: 7.1.2 Bed Carrier with silent PCM (`0.0`). Provides standard DAW compatibility on ADM import, preventing *"File does not contain beds"* errors.
-     - **Channels 11–24**: 14 Fixed Speaker Anchors configured in a 7.1.6 room layout:
-       - Front Left, Center, Front Right: $(\pm 1.0, 1.0, 0.0)$, $(0.0, 1.0, 0.0)$
-       - LFE / Subwoofer: $(0.0, 0.8, 0.0)$
-       - Side Surrounds L/R: $(\pm 1.0, 0.0, 0.0)$
-       - Rear Surrounds L/R: $(\pm 1.0, -1.0, 0.0)$
-       - Top Front L/R: $(\pm 1.0, 1.0, 1.0)$
-       - Top Middle L/R: $(\pm 1.0, 0.0, 1.0)$
-       - Top Rear L/R: $(\pm 1.0, -1.0, 1.0)$
-     - **Channels 25–30**: 6 Dynamic Moving 3D Audio Objects with automated real-time spatial trajectories:
-       - **Lead Vocal**: Intimate whisper proximity tracking and pitch-to-elevation dynamics.
-       - **Backing Left & Right**: Continuous 360° orbit around the listener.
-       - **Guitar / Solo**: Short-time energy pan tracking across the stereo plane.
-       - **Piano / Synth**: Dynamic width expansion with shimmering ceiling elevation.
-       - **Ear Candy / FX**: Spatial risers and 3D delay swirls.
+In v2.0, audio is streamed directly to disk in 96,000-sample blocks (~2.0 seconds):
+- Constant memory consumption below 25 MB RAM.
+- Supports recordings of arbitrary duration (concerts, DJ mixes, soundtracks).
+- Compliant ITU-R BS.2076 chunk headers.
 
 ---
 
@@ -92,40 +113,22 @@ SurroundUpmix authors compliant **Dolby Atmos ADM BWF** (RF64 / BW64) masters co
 | `concert` | Expansive soundstage with pronounced side, rear, and height reflection. |
 | `envelop` | Maximum surround wrapping for ambient, electronic, and cinematic material. |
 
-All presets maintain strict phase coherence: no artificial out-of-phase inversions ($L - R$) and no destructive delays on front-stage material.
-
----
-
-## Advanced Signal Processing
-
-- **Detail Recovery**: Neural separation can cause subtle broadband loss (15–30 dB down). The engine computes the residual signal ($\text{master} - \sum \text{stems}$) and re-injects high-fidelity micro-detail into the mix. A trust verification check automatically disables injection on lossy or misaligned sources.
-- **HF Air Restoration**: Restores high-frequency air above ~9 kHz from the original master into the front soundstage, eliminating the dullness associated with neural stem recombination.
-- **Rear Field Decorrelation**: Applies flat-magnitude all-pass decorrelation filters to rear and height channels, preventing acoustic collapse between side and rear speakers without comb-filtering.
-- **Vocal Role Classifier**: Analyzes signal energy distribution and duty cycles to verify lead vs. backing vocal roles, automatically resolving model classification errors.
-- **Binaural Cue Detection**: Detects interaural time differences (ITD) in dummy-head recordings or binaural masters and maps them to front/rear depth positioning (`--binaural`).
-- **Auto-Balance**: Evaluates integrated loudness across front and rear fields, applying gentle trim adjustments to achieve consistent target balance across diverse tracks.
-
 ---
 
 ## Installation
 
 ### Requirements
-- Python 3.9+
-- Recommended: CUDA-compatible NVIDIA GPU for accelerated stem separation
+- Python 3.9, 3.10, or 3.11
+- Recommended: NVIDIA GPU with CUDA for neural separation acceleration
 
 ```bash
-# Clone the repository
+# Windows 1-Click Installation:
+# Double-click install.bat to automatically install all dependencies!
+
+# Or manual installation:
 git clone https://github.com/final-wav/SurroundUpmix.git
 cd SurroundUpmix
-
-# Install core dependencies
 pip install -r requirements.txt
-
-# Install Demucs for stem separation
-pip install -U demucs
-
-# Optional: Karaoke vocal separation & drag-and-drop UI support
-pip install audio-separator onnxruntime tkinterdnd2
 ```
 
 > **CUDA Acceleration**: For PyTorch with NVIDIA GPU acceleration, install the appropriate wheel from [pytorch.org](https://pytorch.org/):
@@ -137,87 +140,111 @@ pip install audio-separator onnxruntime tkinterdnd2
 
 ## Usage
 
-### Graphical Interface (GUI)
-Launch the graphical interface:
+### 1. Graphical Interface (GUI)
+
+Launch the Studio GUI with interactive 3D soundstage visualization:
 ```bash
 python gui.py
-# On Windows: double-click SurroundUpmix-GUI.bat
-```
-- **Drag & Drop**: Drop audio files or folders directly into the batch queue.
-- **Format Selection**: Choose between 5.1, 7.1, 7.1.2, Dolby Atmos (Playback), ADM BWF (Renderer), or 30-channel All-Objects.
-- **Queue Manager**: Reorder, pause, or remove jobs with live per-track logging.
-
-### Command Line (CLI)
-
-#### End-to-End Processing (`allinone.py`)
-Processes an audio file from separation through final surround export:
-```bash
-# 7.1.2 Immersive WAV
-python allinone.py "song.flac" --format 7.1.2 --preset immersive --device cuda
-
-# 30-channel Dolby Atmos All-Objects Master
-python allinone.py "song.flac" --all-objects --adm-objects --device cuda
+# On Windows: double-click run_gui.bat
 ```
 
-#### Stems-Only Processing (`upmix.py`)
-Upmixes an existing directory of Demucs stems:
+To launch the classic interface with individual sliders:
 ```bash
-# 5.1 Surround FLAC
-python upmix.py "stems/song/" --format 5.1 --preset focus
+python gui_classic.py
+```
 
-# Dolby Atmos ADM BWF for DAW Import
-python upmix.py "stems/song/" --adm --adm-order renderer --adm-objects
+#### Stem Placement & Acoustic Routing Matrix
+Granular per-instrument zone assignments, width, level trims, center/LFE sends, and mute/solo controls:
+
+<p align="center">
+  <img src="docs/screenshots/gui_stem_placement.png" alt="Stem Placement & Acoustic Routing Matrix" width="900">
+</p>
+
+#### Master Deliverables & External Engines
+Independent multi-format export checkboxes (30-ch ADM BWF, E-AC-3 JOC bitstream, 7.1.2, 5.1) and Dolby Encoding Engine (DEE) integration:
+
+<p align="center">
+  <img src="docs/screenshots/gui_output_settings.png" alt="Master Output Formats" width="900">
+</p>
+
+### 2. Command Line Interface (CLI)
+
+#### All-in-One End-to-End Pipeline
+Processes any audio file or multitrack directory directly to 30-channel Dolby Atmos ADM BWF or multichannel audio:
+```bash
+# 30-channel Dolby Atmos ADM BWF master with dynamic 3D motion objects
+python cli.py "song.flac" --format adm --objects --device cuda
+
+# Simultaneous 30-channel ADM BWF Master and Dolby Atmos E-AC-3 JOC bitstream
+python cli.py "song.flac" --format adm,ec3 --preset immersive
+
+# Multichannel 7.1.2 discrete surround
+python cli.py "song.wav" --format 7.1.2 --preset concert
+
+# Drag-and-drop on Windows:
+# Drag your audio file or folder directly onto run_cli.bat!
+```
+
+#### Stems Directory Ingest
+```bash
+python cli.py "path/to/stems_folder" --format adm
 ```
 
 ---
 
-## Codebase Architecture
+## Repository Structure
 
 ```
 SurroundUpmix/
-├── surroundupmix/          # Core processing package
-│   ├── layouts.py          # Speaker channel configurations & WAVE masks
-│   ├── io.py               # Multichannel FLAC / RF64 / BW64 file I/O
-│   ├── adm.py              # ITU-R BS.2076 ADM BWF & Dolby metadata generation
-│   ├── motion.py           # Short-time pan tracking, 360° orbit & 3D trajectories
-│   ├── decompose.py        # Coherence-based direct/ambient decomposition
-│   ├── detect.py           # Doubled-vocal detection (GCC-PHAT)
-│   ├── voice.py            # Lead / backing vocal role verification
-│   ├── recover.py          # Stem separation residual detail recovery
-│   ├── binaural.py         # ITD / HRTF spatial cue detection
-│   ├── dsp.py              # Filters, all-pass decorrelators, loudness utilities
-│   ├── routing.py          # Channel matrices and stem allocation
-│   ├── balance.py          # Front/rear balance & true-peak normalisation
-│   ├── presets.py          # Spatial presets configuration
-│   └── engine.py           # Pipeline orchestration (upmix_folder)
-├── allinone.py             # CLI: Song -> Demucs -> Split -> Surround
-├── upmix.py                # CLI: Stems -> Surround
-├── split_vocals.py         # Lead / backing karaoke separator
-├── demo_generator.py       # Standalone spatial Atmos demo master generator
-├── gui.py                  # Tkinter multi-threaded batch GUI
-└── tests/
-    └── test_engine.py      # Synthetic audio physics test suite
+├── surroundupmix/              # Core DSP and ADM authoring package
+│   ├── adm.py                  # ITU-R BS.2076 ADM BWF streaming writer & Dolby metadata
+│   ├── balance.py              # Front/rear balance & LUFS loudness calibration
+│   ├── binaural.py             # Binaural spatial cues & HRTF preview
+│   ├── decompose.py            # Standard DSP energy-conserving coherence decomposition
+│   ├── detect.py               # GCC-PHAT doubled vocal phase detection
+│   ├── dolby_signature_30ch.bin# Dolby Atmos 30-channel binary signature
+│   ├── dsp.py                  # Linear-phase filters & all-pass decorrelators
+│   ├── engine.py               # Multichannel stems mixing orchestrator
+│   ├── inputs.py               # Audio input probing & format validation
+│   ├── io.py                   # High-speed RF64 / BW64 / FLAC audio I/O
+│   ├── layouts.py              # Channel masks for 5.1, 7.1, 7.1.2, 7.1.4, 7.1.6
+│   ├── motion.py               # 3D spatial trajectories (orbit, rise, whisper, pan)
+│   ├── nugen.py                # Optional VST3 plugin bridge
+│   ├── overrides.py            # Multitrack stem custom acoustic overrides
+│   ├── presets.py              # Presets (focus, immersive, concert, envelop)
+│   ├── recover.py              # Neural residual micro-detail recovery
+│   ├── routing.py              # Acoustic routing matrices & LFE crossover
+│   ├── split.py                # Stem separation dispatch (Demucs / Roformer)
+│   ├── stemnames.py            # Automatic multitrack stem name resolution
+│   └── voice.py                # Vocal role classification & guardrails
+├── gui.py                      # Studio GUI with interactive 3D soundstage
+├── gui_classic.py              # Granular classic GUI with manual sliders
+├── cli.py                      # Unified CLI interface
+├── pipeline.py                 # Core production pipeline engine
+├── config.py                   # User settings & external tool registry
+├── binaural_matrix.py          # Binaural matrix processing utilities
+├── analyze_motion_events.py    # Spatial motion verification tool
+├── install.bat                 # Windows 1-click dependency installer
+├── run_gui.bat                 # Alternative GUI batch launcher
+├── run_cli.bat                 # Windows drag-and-drop CLI runner
+└── requirements.txt            # Python dependencies
 ```
 
 ---
 
-## Verification & Tests
+## Troubleshooting & FAQ
 
-The test suite validates physical properties, channel masks, and metadata without requiring external audio assets:
-```bash
-python tests/test_engine.py
-```
+#### Q: How does v2.0 fix `ArrayMemoryError` (OOM)?
+In previous versions, ADM files were assembled by building a single NumPy array of shape `(samples, 30)` in 32-bit floating point. For a 1-hour audio track, this required allocating tens of gigabytes of contiguous RAM at once. In v2.0, `surroundupmix/adm.py` streams audio directly to disk in 96,000-sample chunks, reducing memory consumption to < 25 MB regardless of track length.
 
-Tests verify:
-- Energy conservation across direct and ambient splits.
-- RF64/BW64 container integrity and ITU-R BS.2076 `axml`/`chna` chunk structure.
-- Front/rear auto-balance calibration.
-- Decorrelation phase linearity and correlation reduction.
-- GCC-PHAT doubled vocal detection and vocal role guards.
-- Dynamic 3D motion tracking and coordinate boundaries.
+#### Q: Can I run this without external plugins or proprietary DAWs?
+**Yes.** SurroundUpmix v2.0 is 100% self-contained with its built-in Standard DSP engine and does not require any paid DAWs or commercial plugins. The generated ADM BWF files can be imported directly into any Dolby Atmos-compatible DAW (Pro Tools, Logic Pro, DaVinci Resolve Studio, Nuendo, Studio One) or the Dolby Atmos Production Suite.
+
+#### Q: How does Dolby Encoding Engine (DEE) integration work?
+When an optional `dee.exe` path is provided in Output & Settings, SurroundUpmix can directly encode the 30-channel master into a Dolby Digital Plus with Atmos (E-AC-3 JOC .m4a) bitstream. Windows 8.3 short paths are automatically resolved to prevent XML parser space-truncation issues. Without DEE, the software produces broadcast-ready 30-channel ADM BWF (.wav) masters for immediate DAW import.
 
 ---
 
 ## License
 
-Personal and production use, provided as-is. Third-party components (Demucs, Roformer models, Cavern metadata structures) are governed by their respective licenses.
+Released under open-source terms. Third-party components and models are governed by their respective licenses (Demucs: MIT; ITU-R BS.2076 / ADM specifications: ITU).

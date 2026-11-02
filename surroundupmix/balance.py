@@ -10,10 +10,12 @@ from .layouts import FRONT_SET, REAR_SET, LAYOUTS
 # or it plays back far too hot. On top of that the bass is already full-range in
 # the mains and bass management feeds the sub from those, so a loud LFE doubles
 # the low end. So bake the -10 dB reproduction offset into the written LFE.
-LFE_REPRO_OFFSET_DB = -10.0
+# Modern Dolby Atmos decoders & Soundbars expect full calibrated LFE reference.
+# Pre-attenuating by -10 dB / -13 dB starved consumer subs of real punch.
+LFE_REPRO_OFFSET_DB = 0.0
 
 
-def build_lfe(stems, cross, sr, gain_db=-3.0, overrides=None):
+def build_lfe(stems, cross, sr, gain_db=0.0, overrides=None):
     """LFE from the real low end of BASS + kick (drums low band), not a
     low-pass of the whole mix - keeps it tight instead of muddy. The written
     level carries the -10 dB LFE reproduction offset (see above).
@@ -36,12 +38,17 @@ def build_lfe(stems, cross, sr, gain_db=-3.0, overrides=None):
         if mul:
             m = mono(stems["bass"])
             acc[:len(m)] += m * mul
-    if "drums" in stems:
+    if "kick" in stems:
+        mul = send("kick", 0.75)   # clean discrete kick body direct to LFE
+        if mul:
+            m = mono(stems["kick"])
+            acc[:len(m)] += m * mul
+    elif "drums" in stems:
         mul = send("drums", 0.7)   # kick body, a touch under the bass
         if mul:
             m = mono(stems["drums"])
             acc[:len(m)] += m * mul
-    if "bass" not in stems and "drums" not in stems:
+    if "bass" not in stems and "drums" not in stems and "kick" not in stems:
         # fall back to the full mix low end
         for st in stems.values():
             m = mono(st)
@@ -74,7 +81,9 @@ def auto_balance(chans, rear_below_front, rear_gain=0.0):
     front_db = 10.0 * np.log10(fe)
     rear_db = 10.0 * np.log10(re / scale)
     trim = (front_db - rear_below_front + rear_gain) - rear_db
-    trim = float(max(-24.0, min(12.0, trim)))
+    # Standard DSP principle: Never artificially boost subtle room ambient tails into a roaring noise.
+    # Only trim down if rear energy exceeds the target.
+    trim = float(max(-24.0, min(0.0, trim)))
     g = db_to_lin(trim)
     for c in LAYOUTS[chans.fmt]:
         if c in REAR_SET:

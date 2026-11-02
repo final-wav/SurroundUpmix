@@ -20,7 +20,7 @@ def looks_like_stems(d):
     either by tidy Demucs names, or by descriptive filenames (e.g. '... Drums
     Left.wav') recognised by the instrument word."""
     if _has_stem(d, "vocals") and (
-            _has_stem(d, "bass") or _has_stem(d, "drums") or _has_stem(d, "other")):
+            _has_stem(d, "bass") or _has_stem(d, "drums") or _has_stem(d, "other") or _has_stem(d, "kick")):
         return True
     from .stemnames import folder_stem_map
     m = folder_stem_map(d)

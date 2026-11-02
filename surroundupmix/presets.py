@@ -24,34 +24,34 @@ PRESETS = {
     # vocal-forward, tasteful wrap - dialogue/lead sits firmly up front
     "focus": dict(
         vocal_center=0.65, vocal_front=0.0,
-        amb_side=-7, amb_back=-11, amb_height=-12,
+        amb_side=-8, amb_back=-14, amb_height=-14,
         drum_side=-12, voc_side=-14,
         height_hp=3500, lateral_arc=0.15,
-        rear_below_front=18, lfe_cross=115,
+        rear_below_front=24, lfe_cross=115,
     ),
-    # balanced all-rounder - THE reference character (default)
+    # balanced all-rounder - THE reference character (Standard DSP reference standard)
     "immersive": dict(
         vocal_center=0.50, vocal_front=0.0,
-        amb_side=-4, amb_back=-7, amb_height=-9,
-        drum_side=-9, voc_side=-10,
+        amb_side=-6, amb_back=-12, amb_height=-12,
+        drum_side=-9, voc_side=-12,
         height_hp=3000, lateral_arc=0.25,
-        rear_below_front=15, lfe_cross=120,   # rear_below_front 16->15 = 1 dB louder rear
+        rear_below_front=22, lfe_cross=120,
     ),
     # roomy / live - a touch more height and back, slightly looser front
     "concert": dict(
         vocal_center=0.45, vocal_front=0.0,
-        amb_side=-2, amb_back=-4, amb_height=-6,
-        drum_side=-7, voc_side=-8,
+        amb_side=-4, amb_back=-10, amb_height=-10,
+        drum_side=-7, voc_side=-10,
         height_hp=2800, lateral_arc=0.30,
-        rear_below_front=13, lfe_cross=120,
+        rear_below_front=20, lfe_cross=120,
     ),
-    # maximum wrap - most of the spectrum's ambience surrounds you
+    # maximum wrap - deep immersion
     "envelop": dict(
         vocal_center=0.40, vocal_front=0.0,
-        amb_side=-1, amb_back=-3, amb_height=-5,
-        drum_side=-6, voc_side=-7,
+        amb_side=-3, amb_back=-8, amb_height=-8,
+        drum_side=-6, voc_side=-8,
         height_hp=2500, lateral_arc=0.35,
-        rear_below_front=12, lfe_cross=125,
+        rear_below_front=18, lfe_cross=125,
     ),
 }
 

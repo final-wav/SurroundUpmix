@@ -1,25 +1,27 @@
 #!/usr/bin/env python3
-"""SurroundUpmix Studio - Flat Modern Dark Studio GUI.
-
-Features:
-- Flat Modern Studio Aesthetic: Zero harsh 1px Windows-XP borders, smooth surfaces,
-  modern typography, and clean pill badges.
-- Unified Smart Queue: Auto-classifies songs vs. stems without tab switching.
-- Interactive Glow Soundstage: Top-down studio listening room displaying speaker rigs
-  (5.1, 7.1, 7.1.2 Atmos) and acoustic instrument radiation nodes.
-- Structured 4-Tab Advanced Engine: 100% of fine-tuning knobs preserved.
-- Real-time Multi-Stage Progress: Demucs AI split ➔ Vocal roles ➔ 3D Atmos mastering.
 """
-import json
-import math
-import os
-import queue
-import re
-import subprocess
-import sys
-import tempfile
-import threading
+gui.py - Professional Studio GUI for SurroundUpmix v2.0
+Features:
+  - Interactive 3D Perspective Soundstage (Click-drag Orbit, Pitch, Pan & Zoom)
+  - Granular Stem Placement & Acoustic Routing Matrix (Zone, Level, Spread, Ctr/LFE, Mute, Solo)
+  - Acoustic Presets & 3D Motion Dynamics
+  - Neural Separation Dispatch (Demucs 6-stem, Vocal Split, DrumSep Sub-drums)
+  - Binaural Render Mode Matrix (Off, Near, Mid, Far per object)
+  - Clean Output Management (Custom Directory or Output/ next to input)
+  - Live Console & Multi-Stage Production Monitor
+"""
 
+import os
+import sys
+import time
+import math
+import queue
+import threading
+from pathlib import Path
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox
+
+# Set UTF-8 encoding
 if sys.platform == "win32":
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
@@ -29,1331 +31,1190 @@ if sys.platform == "win32":
 os.environ["PYTHONIOENCODING"] = "utf-8"
 os.environ["PYTHONUTF8"] = "1"
 
-import tkinter as tk
-from tkinter import filedialog, ttk
+BASE_DIR = Path(__file__).resolve().parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
+from pipeline import AtmosPipeline, extract_metadata
+from binaural_matrix import OBJECT_KEYS, PRESET_MATRICES, get_default_matrix
+import config
+from surroundupmix.overrides import STEMS as OVERRIDE_STEMS, ZONES as OVERRIDE_ZONES, normalize as normalize_overrides
+from surroundupmix.nugen import is_nugen_available
+
+# Optional PIL for cover art rendering
+try:
+    from PIL import Image, ImageTk
+    import io
+    HAVE_PIL = True
+except Exception:
+    HAVE_PIL = False
+
+# Optional drag and drop
 try:
     from tkinterdnd2 import TkinterDnD, DND_FILES
     HAVE_DND = True
 except Exception:
     HAVE_DND = False
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from surroundupmix.inputs import AUDIO_EXT, expand_inputs  # noqa: E402
+# Professional Dark Studio Palette
+BG = "#0f1013"
+PANEL = "#16171b"
+CARD = "#1d1e23"
+INPUT_BG = "#26282f"
+BORDER = "#2d3038"
+FG = "#f0f2f5"
+MUTED = "#888c96"
+ACCENT = "#5865f2"
+ACCENT_HOVER = "#6975f5"
+GREEN = "#45c970"
+RED = "#ed4245"
+YELLOW = "#f59e0b"
+CONSOLE_BG = "#0b0c0e"
 
-HERE = os.path.dirname(os.path.abspath(__file__))
-CFG_PATH = os.path.join(os.path.expanduser("~"), ".surroundupmix_gui.json")
+PRESETS = ["immersive", "focus", "concert", "envelop"]
+MOTION_MODES = ["dynamic", "subtle", "expressive"]
+VOCAL_MODES = ["auto", "spread", "forward"]
+SPLIT_OPTIONS = ["auto", "on", "off"]
+BITRATES = ["768", "640", "576", "448", "384"]
+DRC_MODES = ["music_light", "music_standard", "none"]
+BINAURAL_MODES = ["off", "near", "mid", "far"]
 
-# ---- Flat Modern Studio Dark Palette ----------------------------------------
-BG = "#0f1013"              # Deep obsidian base
-PANEL = "#17181c"           # Elevated surface
-CARD = "#1f2026"            # Inner card background
-INPUT_BG = "#272930"        # Input fields & dropdowns
-BORDER = "#2e3038"          # Ultra-subtle border
-FG = "#f2f3f5"              # Crisp modern text
-MUTED = "#8e929b"           # Secondary text
-ACCENT = "#5865f2"          # Modern vibrant indigo/blurple
-ACCENT_HI = "#6d78f5"
-OK = "#57f287"              # Vibrant green
-STOP = "#ed4245"            # Vibrant red
-SEL = "#32353e"             # Selection highlight
-LOG_BG = "#0b0c0e"          # Clean dark terminal console
-
-# Soundstage visualizer colors
-STAGE_BG = "#131418"
-STAGE_RING = "#1d1f25"
-SPK_OFF = "#2b2d35"
-SPK_ON = "#5865f2"
-SPK_HEIGHT = "#a855f7"
-COL_VOCAL = "#ff6b6b"
-COL_BASS = "#57f287"
-COL_OTHER = "#f1c40f"
-COL_BACKING = "#ec4899"
-
-FORMATS = ["5.1", "7.1", "7.1.2"]
-PRESETS = ["focus", "immersive", "concert", "envelop"]
-DEVICES = ["auto", "cuda", "cpu"]
-SPLIT = ["auto", "on", "off"]
-VOCAL = ["auto", "spread", "forward"]
-MODELS = ["htdemucs_ft", "htdemucs_6s", "htdemucs"]
-VROLES = ["auto", "keep", "swap"]
-OUTPUTS = ["Dolby Atmos (20ch Objects)", "7.1.2", "Dolby Atmos", "ADM BWF", "7.1", "5.1"]
-PLACE_STEMS = ("vocals", "bass", "drums", "other", "guitar", "piano")
-INSTRUMENTS = ("bass", "drums", "vocals", "other", "guitar", "piano", "backing")
-
-OUTPUT_DESC = {
-    "Dolby Atmos (20ch Objects)": "Studio One & Atmos master: 10-ch silent 7.1.2 bed carrier + 20 3D Audio Objects (14 fixed 7.1.6 speaker anchors + 6 dynamic moving objects).",
-    "7.1.2": "10-channel 7.1.2 discrete WAV with stereo height speakers. Plays directly on Atmos-capable hardware.",
-    "Dolby Atmos": "Self-contained 7.1.2 ADM BWF master (48 kHz) with moving 3D objects (Playback speaker bed order).",
-    "ADM BWF": "Certified 7.1.2 ADM BWF master for Dolby Atmos Renderer, Studio One, Pro Tools, and DaVinci Resolve.",
-    "7.1": "8-channel FLAC/WAV - full panoramic surround wrap for 7.1 theater setups.",
-    "5.1": "6-channel FLAC/WAV - standard surround sound compatible with all 5.1 receivers.",
+STEM_ROUTING_KEYS = ["vocals", "backing", "bass", "drums", "guitar", "piano", "other"]
+STEM_DISPLAY_NAMES = {
+    "vocals": "Lead Vocal",
+    "backing": "Backing Vocals",
+    "bass": "Bass",
+    "drums": "Drums",
+    "guitar": "Guitar",
+    "piano": "Piano / Keys",
+    "other": "Synth / Other"
 }
 
-PRESET_METERS = {
-    "focus":     [("Surround wrap", 1), ("Vocal center", 5), ("Height presence", 1)],
-    "immersive": [("Surround wrap", 3), ("Vocal center", 3), ("Height presence", 2)],
-    "concert":   [("Surround wrap", 4), ("Vocal center", 2), ("Height presence", 3)],
-    "envelop":   [("Surround wrap", 5), ("Vocal center", 1), ("Height presence", 4)],
-}
 
-PRESET_DESC = {
-    "focus":     "Vocal-forward, subtle surround wrap. The lead voice is firmly anchored in the center.",
-    "immersive": "Balanced 3D reference - hand-tuned studio master character. Fits 95% of tracks.",
-    "concert":   "Spacious acoustics: wider wrap to sides and ceiling heights. Live arena sensation.",
-    "envelop":   "Maximum wrap: ambient music wraps completely around you, vocals open and free.",
-}
+class Interactive3DSoundstage(tk.Canvas):
+    """
+    3D Perspective Listening Room & Spatial Audio Soundstage.
+    Supports Click-and-Drag Orbit Rotation (Yaw & Pitch), Pan & Scroll-to-Zoom.
+    Displays physical 7.1.6 speakers and stem placement positions.
+    """
+    def __init__(self, parent, **kwargs):
+        super().__init__(parent, bg="#111216", highlightthickness=0, **kwargs)
+        self.yaw = -222.0
+        self.pitch = -26.0
+        self.zoom = 1.0
+        self.cam_dist = 3.8
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.auto_rotate = False
+        self.anim_step = 0.0
+        self.stem_zones = {}
 
-TIPS = {
-    "Output": "Target output format. 5.1/7.1/7.1.2 are multi-channel files; Dolby Atmos / ADM BWF write official ADM masters.",
-    "Preset": "Overall acoustic room profile and surround wrap intensity.",
-    "Device": "auto uses your NVIDIA GPU if available (CUDA acceleration), otherwise CPU fallback.",
-    "Split vocals": "Splits lead vocals from backing vocals. Lead stays front; backing wraps in 3D around you.",
-    "Vocal mode": "auto detects doubled vocals to prevent comb-filtering. forward/spread overrides.",
-    "Rear gain (dB)": "Master volume offset for the rear surround field.",
-    "Rear below front": "Target dB attenuation for rear speakers compared to the front soundstage.",
-    "Backing gain": "Volume of backing vocals ('auto' or custom dB).",
-    "Demucs model": "htdemucs_ft = 4 stems (best quality); htdemucs_6s adds discrete guitar and piano.",
-    "Rear decorrelation": "Phase-safe decorrelation feeding side and rear speakers for wide enveloping ambience.",
-    "Detail recovery": "Reinjects subtle micro-transients, air, and room detail lost during neural separation.",
-    "Binaural depth": "Translates binaural dummy-head ITD cues into dynamic front/back leaning.",
-    "Vocal roles": "auto verifies which stem is true lead vs backing. keep/swap overrides.",
-    "Atmos objects": "Exports backing vocals as discrete moving 3D audio objects with dynamic pan-tracking & 360° orbit!",
-    "Motion mode": "3D spatial motion behavior: dynamic (balanced sweeps & depth), expressive (maximum room traversal & solo rides), or subtle (conservative).",
-    "Motion intensity": "Scaling multiplier for 3D trajectory travel depth, diagonal distance, and height elevation.",
-}
+        self.last_mouse_x = 0
+        self.last_mouse_y = 0
+        self.last_right_x = 0
+        self.last_right_y = 0
 
-PLACE_TIP = ("Where each instrument is placed in the room.\n"
-             "auto = song-adaptive positioning based on direct/ambient analysis.\n"
-             "front / side / rear forces that whole stem into the chosen zone.")
+        self.bind("<ButtonPress-1>", self._on_mouse_down)
+        self.bind("<B1-Motion>", self._on_mouse_drag)
+        self.bind("<ButtonPress-3>", self._on_right_down)
+        self.bind("<B3-Motion>", self._on_right_drag)
+        self.bind("<ButtonPress-2>", self._on_right_down)
+        self.bind("<B2-Motion>", self._on_right_drag)
+        self.bind("<MouseWheel>", self._on_mouse_wheel)
+        self.bind("<Configure>", lambda e: self.redraw())
 
+        self._animate_loop()
 
-class ToolTip:
-    """Minimal flat modern dark hover tooltip."""
-    def __init__(self, widget, text):
-        self.widget = widget
-        self.text = text
-        self.tip = None
-        widget.bind("<Enter>", self._show, add="+")
-        widget.bind("<Leave>", self._hide, add="+")
+    def update_stem_zones(self, zones_dict):
+        self.stem_zones = dict(zones_dict)
+        self.redraw()
 
-    def _show(self, _=None):
-        if self.tip or not self.text:
+    def _on_mouse_down(self, event):
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+
+    def _on_mouse_drag(self, event):
+        dx = event.x - self.last_mouse_x
+        dy = event.y - self.last_mouse_y
+        self.yaw += dx * 0.65
+        self.pitch = max(-88.0, min(88.0, self.pitch - dy * 0.65))
+        self.last_mouse_x = event.x
+        self.last_mouse_y = event.y
+        self.redraw()
+
+    def _on_right_down(self, event):
+        self.last_right_x = event.x
+        self.last_right_y = event.y
+
+    def _on_right_drag(self, event):
+        dx = event.x - self.last_right_x
+        dy = event.y - self.last_right_y
+        self.pan_x += dx
+        self.pan_y += dy
+        self.last_right_x = event.x
+        self.last_right_y = event.y
+        self.redraw()
+
+    def _on_mouse_wheel(self, event):
+        if event.delta > 0:
+            self.zoom = min(2.5, self.zoom * 1.1)
+        else:
+            self.zoom = max(0.4, self.zoom * 0.9)
+        self.redraw()
+
+    def set_view(self, view_name):
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        if view_name == "3d":
+            self.yaw = -222.0
+            self.pitch = -26.0
+            self.zoom = 1.0
+        elif view_name == "top":
+            self.yaw = 0.0
+            self.pitch = 88.0
+            self.zoom = 1.15
+        elif view_name == "front":
+            self.yaw = 0.0
+            self.pitch = 0.0
+            self.zoom = 1.05
+        elif view_name == "side":
+            self.yaw = 90.0
+            self.pitch = 0.0
+            self.zoom = 1.05
+        self.redraw()
+
+    def toggle_auto_rotate(self):
+        self.auto_rotate = not self.auto_rotate
+        return self.auto_rotate
+
+    def _animate_loop(self):
+        if self.auto_rotate:
+            self.yaw = (self.yaw + 0.45) % 360.0
+        self.anim_step = (self.anim_step + 0.04) % (2.0 * math.pi)
+        self.redraw()
+        self.after(40, self._animate_loop)
+
+    def project_3d(self, x, y, z, cx, cy):
+        zc = z - 0.35
+        yaw_rad = math.radians(self.yaw)
+        pitch_rad = math.radians(self.pitch)
+
+        x1 = x * math.cos(yaw_rad) - y * math.sin(yaw_rad)
+        y1 = x * math.sin(yaw_rad) + y * math.cos(yaw_rad)
+        z1 = zc
+
+        x2 = x1
+        y2 = y1 * math.cos(pitch_rad) - z1 * math.sin(pitch_rad)
+        z2 = y1 * math.sin(pitch_rad) + z1 * math.cos(pitch_rad)
+
+        dist = self.cam_dist - y2
+        if dist < 0.2:
+            dist = 0.2
+        scale = (210.0 * self.zoom) / dist
+        u = cx + x2 * scale
+        v = cy - z2 * scale
+        return u, v, dist
+
+    def redraw(self):
+        self.delete("all")
+        w = self.winfo_width()
+        h = self.winfo_height()
+        if w < 10 or h < 10:
             return
-        x = self.widget.winfo_rootx() + 14
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
-        self.tip = tw = tk.Toplevel(self.widget)
-        tw.wm_overrideredirect(True)
-        tw.wm_geometry("+%d+%d" % (x, y))
-        f = tk.Frame(tw, bg=CARD, highlightthickness=1, highlightbackground=BORDER)
-        f.pack()
-        tk.Label(f, text=self.text, justify="left", bg=CARD, fg=FG,
-                 padx=10, pady=7, wraplength=380, font=("Segoe UI", 9)).pack()
 
-    def _hide(self, _=None):
-        if self.tip:
-            self.tip.destroy()
-            self.tip = None
+        cx = (w / 2.0) + self.pan_x
+        cy = (h / 2.0) + self.pan_y + 6.0
+
+        # Floor Grid
+        for gx in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+            p1 = self.project_3d(gx, -1.0, 0.0, cx, cy)
+            p2 = self.project_3d(gx, 1.0, 0.0, cx, cy)
+            self.create_line(p1[0], p1[1], p2[0], p2[1], fill="#1c1f26", width=1)
+
+        for gy in [-1.0, -0.5, 0.0, 0.5, 1.0]:
+            p1 = self.project_3d(-1.0, gy, 0.0, cx, cy)
+            p2 = self.project_3d(1.0, gy, 0.0, cx, cy)
+            self.create_line(p1[0], p1[1], p2[0], p2[1], fill="#1c1f26", width=1)
+
+        # Room Bounding Box
+        corners = [
+            (-1.1, -1.1, 0.0), (1.1, -1.1, 0.0), (1.1, 1.1, 0.0), (-1.1, 1.1, 0.0),
+            (-1.1, -1.1, 0.70), (1.1, -1.1, 0.70), (1.1, 1.1, 0.70), (-1.1, 1.1, 0.70),
+        ]
+        cp = [self.project_3d(x, y, z, cx, cy) for x, y, z in corners]
+        self.create_polygon(cp[0][0], cp[0][1], cp[1][0], cp[1][1], cp[2][0], cp[2][1], cp[3][0], cp[3][1], fill="#14161c", outline="#242832", width=1)
+        self.create_line(cp[4][0], cp[4][1], cp[5][0], cp[5][1], cp[6][0], cp[6][1], cp[7][0], cp[7][1], cp[4][0], cp[4][1], fill="#1f232c", width=1, dash=(3, 3))
+        for i in range(4):
+            self.create_line(cp[i][0], cp[i][1], cp[i+4][0], cp[i+4][1], fill="#1b1e25", width=1)
+
+        # Orbit Path
+        orbit_pts = []
+        for a_deg in range(0, 365, 15):
+            rad = math.radians(a_deg)
+            ox = 0.85 * math.cos(rad)
+            oy = -0.40 + 0.35 * math.sin(rad)
+            oz = 0.15 + 0.10 * math.sin(rad * 2.0)
+            pu, pv, _ = self.project_3d(ox, oy, oz, cx, cy)
+            orbit_pts.extend([pu, pv])
+        if len(orbit_pts) >= 4:
+            self.create_line(*orbit_pts, fill="#ec4899", width=1, dash=(2, 2))
+
+        # Listener Position
+        lu, lv, ld = self.project_3d(0.0, 0.0, 0.0, cx, cy)
+        nu, nv, _ = self.project_3d(0.0, 0.18, 0.0, cx, cy)
+        self.create_line(lu, lv, nu, nv, fill=ACCENT, width=2)
+        self.create_oval(lu - 8, lv - 8, lu + 8, lv + 8, fill="#252936", outline=ACCENT, width=2)
+        self.create_text(lu, lv + 14, text="LISTENER", fill="#6b7280", font=("Segoe UI", 7, "bold"))
+
+        # Physical 7.1.6 Anchors
+        elements = [
+            (-1.0,  1.0, 0.0, "L",   "#5865f2", False),
+            ( 1.0,  1.0, 0.0, "R",   "#5865f2", False),
+            ( 0.0,  1.0, 0.0, "C",   "#45c970", False),
+            ( 0.0,  0.8, 0.0, "LFE", "#f59e0b", False),
+            (-1.0,  0.0, 0.0, "Lss", "#3b82f6", False),
+            ( 1.0,  0.0, 0.0, "Rss", "#3b82f6", False),
+            (-1.0, -1.0, 0.0, "Lrs", "#6366f1", False),
+            ( 1.0, -1.0, 0.0, "Rrs", "#6366f1", False),
+            (-1.0,  1.0, 0.70, "TFL", "#8b5cf6", True),
+            ( 1.0,  1.0, 0.70, "TFR", "#8b5cf6", True),
+            (-1.0,  0.0, 0.70, "TML", "#8b5cf6", True),
+            ( 1.0,  0.0, 0.70, "TMR", "#8b5cf6", True),
+            (-1.0, -1.0, 0.70, "TRL", "#a78bfa", True),
+            ( 1.0, -1.0, 0.70, "TRR", "#a78bfa", True),
+        ]
+
+        # Dynamic Stem Overlay Nodes based on stem placement settings
+        stem_default_coords = {
+            "vocals": (0.0, 0.60, 0.10, "#ff6b6b"),
+            "backing": (0.85 * math.cos(self.anim_step), -0.40 + 0.35 * math.sin(self.anim_step), 0.15 + 0.10 * math.sin(self.anim_step * 2.0), "#ec4899"),
+            "bass": (0.0, 0.40, 0.0, "#f59e0b"),
+            "drums": (0.0, 0.75, 0.05, "#38bdf8"),
+            "guitar": (-0.65, 0.70, 0.0, "#34d399"),
+            "piano": (0.65, 0.70, 0.0, "#a3e635"),
+            "other": (0.0, 0.10, 0.35, "#f472b6")
+        }
+
+        for stem_key, def_cfg in stem_default_coords.items():
+            user_zone = self.stem_zones.get(stem_key, "auto")
+            col = def_cfg[3]
+            s_name = STEM_DISPLAY_NAMES.get(stem_key, stem_key.capitalize())
+            if user_zone == "front":
+                x = -0.5 if stem_key in ("guitar", "backing") else (0.5 if stem_key == "piano" else 0.0)
+                elements.append((x, 0.85, 0.0, s_name, col, False))
+            elif user_zone == "side":
+                x = -0.95 if stem_key in ("guitar", "backing") else 0.95
+                elements.append((x, 0.0, 0.0, s_name, col, False))
+            elif user_zone == "rear":
+                x = -0.85 if stem_key in ("guitar", "backing") else 0.85
+                elements.append((x, -0.85, 0.0, s_name, col, False))
+            elif user_zone in ("heights", "ceiling"):
+                elements.append((0.0, 0.20, 0.70, s_name, col, True))
+            elif user_zone == "orbit":
+                ox = 0.85 * math.cos(self.anim_step)
+                oy = -0.40 + 0.35 * math.sin(self.anim_step)
+                oz = 0.15 + 0.10 * math.sin(self.anim_step * 2.0)
+                elements.append((ox, oy, oz, s_name, col, False))
+            else:
+                elements.append((def_cfg[0], def_cfg[1], def_cfg[2], s_name, col, (def_cfg[2] > 0.4)))
+
+        # Depth sort and render
+        projected = []
+        for x, y, z, label, color, is_height in elements:
+            u, v, dist = self.project_3d(x, y, z, cx, cy)
+            drop_info = None
+            if is_height:
+                fu, fv, _ = self.project_3d(x, y, 0.0, cx, cy)
+                drop_info = (fu, fv)
+            projected.append((dist, u, v, label, color, is_height, drop_info))
+
+        projected.sort(key=lambda item: item[0], reverse=True)
+
+        for dist, u, v, label, color, is_height, drop_info in projected:
+            if drop_info:
+                fu, fv = drop_info
+                self.create_line(u, v, fu, fv, fill="#374151", width=1, dash=(2, 2))
+                self.create_oval(fu - 3, fv - 2, fu + 3, fv + 2, fill="#232731", outline="")
+
+            r = 7 if not is_height else 6
+            self.create_oval(u - r, v - r, u + r, v + r, fill=color, outline="#111216", width=1)
+            self.create_text(u, v - 11, text=label, fill="#d1d5db", font=("Segoe UI", 7, "bold"))
 
 
-# ---- Modern App -------------------------------------------------------------
-class App:
+class ModernAtmosGUI:
     def __init__(self, root):
         self.root = root
-        self.proc = None
-        self.running = False
-        self.stop_flag = False
-        self.q = queue.Queue()
-        self.jobs = {}          # iid -> {"path": ..., "kind": ...}
-        self._cfg_vars = {}     # name -> tk.StringVar
-        self.cfg = self._load_cfg()
+        self.root.title("SurroundUpmix Studio v2.0")
+        self.root.geometry("1180x840")
+        self.root.minsize(1040, 720)
+        self.root.configure(bg=BG)
 
-        root.title("SurroundUpmix Studio")
-        root.configure(bg=BG)
-        root.geometry("940x880")
-        root.minsize(840, 600)
+        self.pipeline = AtmosPipeline()
+        self.queue_items = []
+        self.current_index = -1
+        self.is_processing = False
+        self.cancel_requested = False
+        self.msg_queue = queue.Queue()
 
-        self._style()
-        self._build()
-        self._apply_cfg()
+        self._init_variables()
+        self._setup_styles()
+        self._build_ui()
+        self._start_message_pump()
 
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        self.root.after(80, self._drain)
+    def _init_variables(self):
+        # Preset & Engine
+        self.var_preset = tk.StringVar(value="immersive")
+        self.var_motion = tk.StringVar(value="dynamic")
+        self.var_intensity = tk.DoubleVar(value=1.0)
+        self.var_vocal_mode = tk.StringVar(value="auto")
+        self.var_decorr = tk.BooleanVar(value=True)
+        self.var_detail = tk.BooleanVar(value=True)
+        self.var_binaural = tk.IntVar(value=0)
 
-    # ------------------------------------------------------------ config
-    def _load_cfg(self):
-        try:
-            with open(CFG_PATH, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
+        # AI & Separation
+        self.var_sep_model = tk.StringVar(value="htdemucs_6s")
+        self.var_split = tk.StringVar(value="auto")
+        self.var_force_vocal_split = tk.BooleanVar(value=True)
+        self.var_split_drums = tk.BooleanVar(value=True)
 
-    def _save_cfg(self):
-        try:
-            cfg = {name: var.get() for name, var in self._cfg_vars.items()}
-            try:
-                cfg["geometry"] = self.root.geometry()
-            except Exception:
-                pass
-            with open(CFG_PATH, "w", encoding="utf-8") as f:
-                json.dump(cfg, f, indent=2)
-        except Exception:
-            pass
+        # External Tools & Plugins
+        cfg_dee = config.get_config_value("dee_path", "")
+        self.var_dee_path = tk.StringVar(value=cfg_dee)
+        self.var_dee_status = tk.StringVar(value="")
 
-    def _apply_cfg(self):
-        geom = self.cfg.get("geometry")
-        if geom:
-            try:
-                self.root.geometry(geom)
-            except Exception:
-                pass
-        for name, var in self._cfg_vars.items():
-            if name in self.cfg:
-                var.set(self.cfg[name])
-        self._on_output()
-        self._on_preset()
-        self._on_binaural()
-        self._update_context()
-        self._draw_stage()
+        self.var_vst3_mode = tk.StringVar(value="Standard DSP (Built-in)")
+        cfg_vst3 = config.get_config_value("custom_vst3_path", "")
+        self.var_vst3_path = tk.StringVar(value=cfg_vst3)
+        self.var_export_ec3 = tk.BooleanVar(value=True)
+        self.var_export_adm = tk.BooleanVar(value=True)
+        self.var_export_712 = tk.BooleanVar(value=False)
+        self.var_export_51 = tk.BooleanVar(value=False)
 
-    def _reg(self, name, var):
-        self._cfg_vars[name] = var
-        return var
+        # Format & Output
+        self.var_target_format = tk.StringVar(value="30ch_adm")
+        self.var_bitrate = tk.StringVar(value="768")
+        self.var_drc = tk.StringVar(value="music_light")
+        self.var_device = tk.StringVar(value="auto")
+        self.var_custom_output = tk.StringVar(value="")
 
-    def _on_close(self):
-        self._save_cfg()
-        self.root.destroy()
+        # Granular Stem Routing Variables: stem -> dict of vars
+        self.stem_vars = {}
+        for stem in STEM_ROUTING_KEYS:
+            self.stem_vars[stem] = {
+                "zone": tk.StringVar(value="auto"),
+                "level": tk.StringVar(value="0.0"),
+                "spread": tk.StringVar(value="auto"),
+                "ctrlfe": tk.StringVar(value=""),
+                "mute": tk.BooleanVar(value=False),
+                "solo": tk.BooleanVar(value=False)
+            }
 
-    # ------------------------------------------------------------ flat styling
-    def _style(self):
+        # Binaural Render Mode Matrix
+        self.binaural_vars = {}
+        def_matrix = get_default_matrix("punchy_direct")
+        for item in OBJECT_KEYS:
+            key = item[0] if isinstance(item, (tuple, list)) else item
+            self.binaural_vars[key] = tk.StringVar(value=def_matrix.get(key, "near"))
+
+    def _setup_styles(self):
         s = ttk.Style()
         s.theme_use("clam")
 
-        # Global defaults: NO 1px solid borders, clean flat surfaces
-        s.configure(".", background=PANEL, foreground=FG, fieldbackground=INPUT_BG,
-                    bordercolor=BORDER, lightcolor=PANEL, darkcolor=PANEL,
-                    troughcolor=CARD, focuscolor=ACCENT, borderwidth=0)
-        s.configure("TFrame", background=PANEL, borderwidth=0)
-        s.configure("Bg.TFrame", background=BG, borderwidth=0)
-        s.configure("Card.TFrame", background=CARD, borderwidth=0)
-
-        s.configure("TLabel", background=PANEL, foreground=FG, font=("Segoe UI", 9))
-        s.configure("Muted.TLabel", background=PANEL, foreground=MUTED, font=("Segoe UI", 9))
-        s.configure("Hint.TLabel", background=PANEL, foreground=MUTED, font=("Segoe UI", 9))
-        s.configure("CardMuted.TLabel", background=CARD, foreground=MUTED, font=("Segoe UI", 9))
-        s.configure("Card.TLabel", background=CARD, foreground=FG, font=("Segoe UI", 9))
-
-        s.configure("Header.TLabel", background=BG, foreground=FG, font=("Segoe UI", 16, "bold"))
-        s.configure("Sub.TLabel", background=BG, foreground=MUTED, font=("Segoe UI", 9))
-        s.configure("CardTitle.TLabel", background=PANEL, foreground=FG, font=("Segoe UI", 10, "bold"))
-
-        # Flat inputs
-        s.configure("TEntry", fieldbackground=INPUT_BG, foreground=FG,
-                    insertcolor=FG, bordercolor=BORDER, padding=(8, 6), borderwidth=0)
-        s.configure("TCombobox", fieldbackground=INPUT_BG, background=INPUT_BG,
-                    foreground=FG, arrowcolor=FG, bordercolor=BORDER, padding=(8, 5), borderwidth=0)
-        s.map("TCombobox", fieldbackground=[("readonly", INPUT_BG)], foreground=[("readonly", FG)],
-              selectbackground=[("", INPUT_BG)], selectforeground=[("", FG)])
-        self.root.option_add("*TCombobox*Listbox.background", CARD)
-        self.root.option_add("*TCombobox*Listbox.foreground", FG)
-        self.root.option_add("*TCombobox*Listbox.selectBackground", ACCENT)
-        self.root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
-        self.root.option_add("*TCombobox*Listbox.borderwidth", "0")
-
-        # Flat Treeview (Queue)
-        s.configure("Queue.Treeview", background=CARD, fieldbackground=CARD,
-                    foreground=FG, bordercolor=CARD, borderwidth=0, rowheight=32,
-                    font=("Segoe UI", 9))
-        s.map("Queue.Treeview", background=[("selected", SEL)], foreground=[("selected", FG)])
-        s.configure("Queue.Treeview.Heading", background=INPUT_BG, foreground=MUTED,
-                    bordercolor=INPUT_BG, relief="flat", font=("Segoe UI", 9, "bold"), padding=(8, 6))
-        s.map("Queue.Treeview.Heading", background=[("active", INPUT_BG)])
-
-        # Flat Buttons (Pill-like, no harsh borders)
-        s.configure("Accent.TButton", background=ACCENT, foreground="#ffffff",
-                    bordercolor=ACCENT, focusthickness=0, padding=(18, 9),
-                    font=("Segoe UI", 10, "bold"), borderwidth=0)
-        s.map("Accent.TButton", background=[("active", ACCENT_HI), ("disabled", BORDER)],
-              foreground=[("disabled", MUTED)])
-
-        s.configure("Stop.TButton", background=STOP, foreground="#ffffff",
-                    bordercolor=STOP, padding=(16, 9), font=("Segoe UI", 10, "bold"), borderwidth=0)
-        s.map("Stop.TButton", background=[("active", "#c03537"), ("disabled", BORDER)],
-              foreground=[("disabled", MUTED)])
-
-        s.configure("Pill.TButton", background=INPUT_BG, foreground=FG,
-                    bordercolor=INPUT_BG, padding=(12, 6), font=("Segoe UI", 9), borderwidth=0)
-        s.map("Pill.TButton", background=[("active", CARD), ("pressed", BORDER)])
-
-        s.configure("Icon.TButton", background=INPUT_BG, foreground=FG,
-                    bordercolor=INPUT_BG, padding=(8, 5), font=("Segoe UI", 10), borderwidth=0)
-        s.map("Icon.TButton", background=[("active", CARD)])
-
-        s.configure("Link.TButton", background=PANEL, foreground=MUTED,
-                    bordercolor=PANEL, focusthickness=0, padding=(2, 4),
-                    font=("Segoe UI", 9, "bold"), anchor="w", borderwidth=0)
-        s.map("Link.TButton", foreground=[("active", ACCENT)])
-
-        # Flat Notebook tabs
-        s.configure("TNotebook", background=PANEL, borderwidth=0, tabmargins=(0, 0, 0, 0))
-        s.configure("TNotebook.Tab", background=CARD, foreground=MUTED,
-                    padding=(16, 7), borderwidth=0, font=("Segoe UI", 9, "bold"))
-        s.map("TNotebook.Tab", background=[("selected", PANEL)],
-              foreground=[("selected", ACCENT)])
-
-    # ------------------------------------------------------------ layout
-    def _build(self):
-        # Header (Flat & Clean)
-        head = ttk.Frame(self.root, style="Bg.TFrame")
-        head.pack(fill="x", padx=20, pady=(16, 6))
-
-        hrow = ttk.Frame(head, style="Bg.TFrame")
-        hrow.pack(fill="x")
-        ttk.Label(hrow, text="SurroundUpmix Studio", style="Header.TLabel").pack(side="left")
-
-        # Studio Version Badge
-        vbadge = tk.Label(hrow, text="v2.5 · 3D ATMOS", bg="#212430", fg=ACCENT,
-                          font=("Segoe UI", 8, "bold"), padx=8, pady=3)
-        vbadge.pack(side="left", padx=(10, 0))
-
-        ttk.Label(head, text="Intelligent Stereo ➔ 5.1 / 7.1 / 7.1.2 Dolby Atmos Master Suite · Neural Audio Engineering",
-                  style="Sub.TLabel").pack(anchor="w", pady=(2, 0))
-
-        # Top Actions Bar
-        self._build_actions(self.root)
-
-        # Scrollable Body Canvas (Zero borders, clean scrolling)
-        outer = ttk.Frame(self.root, style="Bg.TFrame")
-        outer.pack(fill="both", expand=True)
-        self._canvas = canvas = tk.Canvas(outer, bg=BG, highlightthickness=0)
-        vsb = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
-        canvas.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        canvas.pack(side="left", fill="both", expand=True)
-
-        body = ttk.Frame(canvas, style="Bg.TFrame", padding=(20, 6))
-        self._body_win = canvas.create_window((0, 0), window=body, anchor="nw")
-        body.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
-        canvas.bind("<Configure>", lambda e: canvas.itemconfigure(self._body_win, width=e.width))
-        canvas.bind_all("<MouseWheel>", self._on_wheel)
-
-        # Section 1: Unified Smart Queue Card
-        self._build_smart_queue(body)
-
-        # Section 2: Spatial Target & 2D Studio Soundstage
-        self._build_spatial_section(body)
-
-        # Section 3: Advanced Settings (4-Tab Flat Notebook)
-        self._build_advanced_section(body)
-
-        # Section 4: Live Console Monitor
-        self._build_log_section(body)
-
-    def _on_wheel(self, event):
-        c = getattr(self, "_canvas", None)
-        if c is not None:
-            c.yview_scroll(int(-event.delta / 120), "units")
-
-    # ------------------------------------------------------------ flat card wrapper
-    def _create_card(self, parent, title, hint=""):
-        """Create a modern borderless flat card container."""
-        card = ttk.Frame(parent)
-        card.pack(fill="x", pady=(0, 14))
-
-        # Header line
-        hdr = ttk.Frame(card)
-        hdr.pack(fill="x", padx=4, pady=(0, 6))
-        ttk.Label(hdr, text=title, style="CardTitle.TLabel").pack(side="left")
-        if hint:
-            ttk.Label(hdr, text=hint, style="Muted.TLabel").pack(side="right")
-
-        content = ttk.Frame(card, style="TFrame", padding=14)
-        content.pack(fill="both", expand=True)
-        return content
-
-    # ------------------------------------------------------------ top actions
-    def _build_actions(self, parent):
-        self.act = ttk.Frame(parent, style="Bg.TFrame")
-        self.act.pack(fill="x", padx=20, pady=(6, 10))
-
-        self.start_btn = ttk.Button(self.act, text="▶  Start Queue",
-                                    style="Accent.TButton", command=self._start)
-        self.start_btn.pack(side="left")
-
-        self.stop_btn = ttk.Button(self.act, text="■  Stop", style="Stop.TButton",
-                                   command=self._stop, state="disabled")
-        self.stop_btn.pack(side="left", padx=(8, 0))
-
-        # Right-side progress and status
-        self.status = tk.StringVar(value="Ready")
-        ttk.Label(self.act, textvariable=self.status, style="BgMuted.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(side="right")
-
-        self.prog = ttk.Progressbar(self.act, orient="horizontal", mode="determinate", length=180)
-        self.prog.pack(side="right", padx=(0, 16))
-
-        self.stage_lbl = tk.StringVar(value="")
-        ttk.Label(self.act, textvariable=self.stage_lbl, style="Header.TLabel",
-                  font=("Segoe UI", 9)).pack(side="right", padx=(0, 12))
-
-    # ------------------------------------------------------------ 1. Smart Queue
-    def _build_smart_queue(self, body):
-        qc = self._create_card(body, "1. SMART INPUT QUEUE",
-                               "Drag songs, albums, or stems folders here" if HAVE_DND else "")
-
-        # Action Toolbar (Modern Flat Pills)
-        tb = ttk.Frame(qc)
-        tb.pack(fill="x", pady=(0, 8))
-
-        ttk.Button(tb, text="＋ Add Songs…", style="Pill.TButton",
-                   command=self._add_files).pack(side="left")
-        ttk.Button(tb, text="＋ Add Folder…", style="Pill.TButton",
-                   command=self._add_folder).pack(side="left", padx=(6, 0))
-        ttk.Button(tb, text="＋ Add Stems Folder…", style="Pill.TButton",
-                   command=self._add_stems_folder).pack(side="left", padx=(6, 0))
-
-        ob = ttk.Button(tb, text="📁", style="Icon.TButton", command=self._open_input)
-        ob.pack(side="left", padx=(10, 0))
-        ToolTip(ob, "Open selected item in Explorer")
-
-        ttk.Button(tb, text="▲ Up", style="Pill.TButton",
-                   command=self._move_up).pack(side="left", padx=(14, 0))
-        ttk.Button(tb, text="▼ Down", style="Pill.TButton",
-                   command=self._move_down).pack(side="left", padx=(4, 0))
-        ttk.Button(tb, text="Remove", style="Pill.TButton",
-                   command=self._remove_sel).pack(side="left", padx=(10, 0))
-        ttk.Button(tb, text="Clear", style="Pill.TButton",
-                   command=self._clear_queue).pack(side="left", padx=(6, 0))
-
-        # Flat Treeview
-        tw = ttk.Frame(qc)
-        tw.pack(fill="both", expand=True)
-
-        tree = ttk.Treeview(tw, style="Queue.Treeview", show="headings",
-                            columns=("name", "type", "details", "status"),
-                            height=5, selectmode="extended")
-        tree.heading("name", text="Input Item", anchor="w")
-        tree.heading("type", text="Kind", anchor="w")
-        tree.heading("details", text="Processing / Stems Details", anchor="w")
-        tree.heading("status", text="Status", anchor="w")
-
-        tree.column("name", anchor="w", width=340)
-        tree.column("type", anchor="w", width=110, stretch=False)
-        tree.column("details", anchor="w", width=280)
-        tree.column("status", anchor="w", width=120, stretch=False)
-
-        for tg, col in (("queued", MUTED), ("running", ACCENT),
-                        ("done", OK), ("failed", STOP)):
-            tree.tag_configure(tg, foreground=col)
-        tree.tag_configure("stems_badge", foreground=OK)
-        tree.tag_configure("song_badge", foreground=ACCENT_HI)
-
-        tree.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(tw, command=tree.yview)
-        sb.pack(side="right", fill="y")
-        tree.configure(yscrollcommand=sb.set)
-        self.tree = tree
-
-        if HAVE_DND:
-            self.root.drop_target_register(DND_FILES)
-            self.root.dnd_bind("<<Drop>>", self._on_drop)
-            tree.drop_target_register(DND_FILES)
-            tree.dnd_bind("<<Drop>>", self._on_drop)
-
-    # ------------------------------------------------------------ 2. Spatial & Soundstage
-    def _build_spatial_section(self, body):
-        sc = self._create_card(body, "2. SPATIAL TARGET & STUDIO SOUNDSTAGE")
-
-        row = ttk.Frame(sc)
-        row.pack(fill="both", expand=True)
-
-        # Left Column: Format, Preset, Hardware & Output Folder
-        left = ttk.Frame(row)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 16))
-
-        grid = ttk.Frame(left)
-        grid.pack(fill="x")
-        grid.columnconfigure(0, weight=1, uniform="sp")
-        grid.columnconfigure(1, weight=1, uniform="sp")
-        grid.columnconfigure(2, weight=1, uniform="sp")
-
-        self.output, self._output_cb = self._combo(
-            grid, "Output Format", OUTPUTS, "7.1.2", 0, 0, TIPS["Output"], cb=True)
-        self._reg("output", self.output)
-        self._output_cb.bind("<<ComboboxSelected>>", lambda e: self._on_output())
-
-        self.preset, self._preset_cb = self._combo(
-            grid, "Spatial Preset", PRESETS, "immersive", 0, 1, TIPS["Preset"], cb=True)
-        self._reg("preset", self.preset)
-        self._preset_cb.bind("<<ComboboxSelected>>", lambda e: self._on_preset())
-
-        self.device, self._device_box = self._combo(
-            grid, "Hardware Acceleration", DEVICES, "auto", 0, 2, TIPS["Device"], cb=True)
-        self._reg("device", self.device)
-
-        self.output_desc = tk.StringVar(value=OUTPUT_DESC["7.1.2"])
-        ttk.Label(left, textvariable=self.output_desc, style="Hint.TLabel",
-                  wraplength=430, justify="left").pack(fill="x", pady=(8, 4))
-
-        self.preset_desc = tk.StringVar(value=PRESET_DESC["immersive"])
-        ttk.Label(left, textvariable=self.preset_desc, style="Hint.TLabel",
-                  wraplength=430, justify="left").pack(fill="x", pady=(4, 6))
-
-        # Flat character meters
-        self._meters = []
-        mf = ttk.Frame(left)
-        mf.pack(fill="x", pady=(0, 6))
-        for _ in range(3):
-            mr = ttk.Frame(mf)
-            mr.pack(fill="x", pady=2)
-            lab = ttk.Label(mr, text="", style="Muted.TLabel", width=16, anchor="w")
-            lab.pack(side="left")
-            cv = tk.Canvas(mr, height=7, width=150, bg=INPUT_BG, highlightthickness=0)
-            cv.pack(side="left")
-            self._meters.append((lab, cv))
-
-        # Output folder picker
-        ttk.Label(left, text="Output Directory (blank = 'Output' folder next to each input)",
-                  style="Muted.TLabel").pack(anchor="w", pady=(6, 0))
-        of = ttk.Frame(left)
-        of.pack(fill="x", pady=(3, 0))
-        self.outdir = self._reg("outdir", tk.StringVar())
-        ttk.Entry(of, textvariable=self.outdir).pack(side="left", fill="x", expand=True)
-        ttk.Button(of, text="Browse…", style="Pill.TButton",
-                   command=self._browse_out).pack(side="left", padx=(6, 0))
-        ob = ttk.Button(of, text="📁", style="Icon.TButton", command=self._open_output)
-        ob.pack(side="left", padx=(4, 0))
-        ToolTip(ob, "Open the output folder in Explorer")
-
-        # Right Column: Glow Soundstage Visualizer Canvas
-        right = ttk.Frame(row)
-        right.pack(side="right", fill="both")
-
-        r_hdr = ttk.Frame(right)
-        r_hdr.pack(fill="x", pady=(0, 4))
-        ttk.Label(r_hdr, text="STUDIO SOUNDSTAGE", style="CardTitle.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(side="left")
-        ttk.Label(r_hdr, text="2D Live Map", style="Muted.TLabel",
-                  font=("Segoe UI", 8)).pack(side="right")
-
-        self.stage = tk.Canvas(right, width=290, height=220, bg=STAGE_BG,
-                               highlightthickness=0)
-        self.stage.pack()
-        ToolTip(self.stage, "Studio Soundstage (Live Acoustic Preview):\n"
-                            "• Speakers adapt to 5.1, 7.1, or 7.1.2 Atmos layout\n"
-                            "• Colored nodes show instrument positions live\n"
-                            "• Backing orbitals show Atmos 3D motion envelope")
-
-    def _draw_stage(self):
-        """Draw flat modern studio soundstage with speaker nodes and glowing instruments."""
-        cv = getattr(self, "stage", None)
-        if cv is None:
-            return
-        cv.delete("all")
-        w, h = 290, 220
-        cx, cy = w // 2, h // 2 + 10
-
-        # Studio acoustic perimeter rings
-        cv.create_oval(cx - 85, cy - 85, cx + 85, cy + 85, outline=STAGE_RING, width=1)
-        cv.create_oval(cx - 50, cy - 50, cx + 50, cy + 50, outline=STAGE_RING, width=1)
-
-        # Listener head icon in center (Modern flat circle with directional marker)
-        cv.create_oval(cx - 10, cy - 10, cx + 10, cy + 10, fill="#343741", outline="")
-        cv.create_polygon(cx - 3, cy - 10, cx + 3, cy - 10, cx, cy - 15, fill="#5865f2")
-
-        out = self.output.get() if hasattr(self, "output") else "7.1.2"
-        is_all_obj = (out == "Dolby Atmos (20ch Objects)")
-        is_51 = (out == "5.1")
-        is_71 = (out in ("7.1", "7.1.2", "Dolby Atmos", "ADM BWF", "Dolby Atmos (20ch Objects)"))
-        is_height = (out in ("7.1.2", "Dolby Atmos", "ADM BWF", "Dolby Atmos (20ch Objects)"))
-        preset = self.preset.get() if hasattr(self, "preset") else "immersive"
-
-        # Speakers: [(name, x, y, active, color)]
-        if is_all_obj:
-            speakers = [
-                ("C", cx, 24, True, SPK_ON),
-                ("L", 36, 32, True, SPK_ON),
-                ("R", w - 36, 32, True, SPK_ON),
-                ("Sub", 74, 26, True, OK),
-                ("Lss", 26, cy, True, SPK_ON),
-                ("Rss", w - 26, cy, True, SPK_ON),
-                ("Lrs", 50, h - 26, True, SPK_ON),
-                ("Rrs", w - 50, h - 26, True, SPK_ON),
-                ("Tfl", cx - 44, cy - 50, True, SPK_HEIGHT),
-                ("Tfr", cx + 44, cy - 50, True, SPK_HEIGHT),
-                ("Tml", cx - 44, cy, True, SPK_HEIGHT),
-                ("Tmr", cx + 44, cy, True, SPK_HEIGHT),
-                ("Trl", cx - 44, cy + 46, True, SPK_HEIGHT),
-                ("Trr", cx + 44, cy + 46, True, SPK_HEIGHT),
-            ]
-        else:
-            speakers = [
-                ("C", cx, 24, True, SPK_ON),
-                ("L", 36, 32, True, SPK_ON),
-                ("R", w - 36, 32, True, SPK_ON),
-                ("Sub", 74, 26, True, OK),
-                ("Lss", 26, cy, True, SPK_ON),
-                ("Rss", w - 26, cy, True, SPK_ON),
-                ("Lrs", 50, h - 26, is_71, SPK_ON if is_71 else SPK_OFF),
-                ("Rrs", w - 50, h - 26, is_71, SPK_ON if is_71 else SPK_OFF),
-                ("Ltm", cx - 45, cy - 38, is_height, SPK_HEIGHT if is_height else SPK_OFF),
-                ("Rtm", cx + 45, cy - 38, is_height, SPK_HEIGHT if is_height else SPK_OFF),
-            ]
-
-        for nm, sx, sy, active, col in speakers:
-            sz = 6 if nm.startswith("T") or nm.startswith("Ltm") or nm.startswith("Rtm") else 8
-            fill = col if active else SPK_OFF
-            # Pill speaker
-            cv.create_rectangle(sx - sz, sy - sz, sx + sz, sy + sz, fill=fill, outline="")
-            cv.create_text(sx, sy + sz + 6, text=nm, fill=MUTED if active else "#2e3038",
-                           font=("Segoe UI", 7, "bold"))
-
-        # Instrument nodes based on preset
-        spread_mult = {"focus": 0.55, "immersive": 1.0, "concert": 1.25, "envelop": 1.45}.get(preset, 1.0)
-
-        # 1. Lead Vocal (Coral Glow) - Center Front
-        # Soft outer halo
-        cv.create_oval(cx - 10, cy - 56 - 10, cx + 10, cy - 56 + 10, fill="#3d2125", outline="")
-        cv.create_oval(cx - 6, cy - 56 - 6, cx + 6, cy - 56 + 6, fill=COL_VOCAL, outline="")
-        cv.create_text(cx, cy - 68, text="Lead", fill=COL_VOCAL, font=("Segoe UI", 8, "bold"))
-
-        # 2. Bass & Drums (Emerald Glow) - Front/Sub
-        cv.create_oval(cx - 26 - 5, cy - 36 - 5, cx - 26 + 5, cy - 36 + 5, fill=COL_BASS, outline="")
-        cv.create_oval(cx + 26 - 5, cy - 36 - 5, cx + 26 + 5, cy - 36 + 5, fill=COL_BASS, outline="")
-        cv.create_text(cx, cy - 37, text="Drums / Bass", fill=COL_BASS, font=("Segoe UI", 7))
-
-        # 3. Other / Guitars / Synths (Golden Glow) - Side Spread
-        dx_other = int(58 * min(1.3, spread_mult))
-        cv.create_oval(cx - dx_other - 6, cy - 8 - 6, cx - dx_other + 6, cy - 8 + 6, fill=COL_OTHER, outline="")
-        cv.create_oval(cx + dx_other - 6, cy - 8 - 6, cx + dx_other + 6, cy - 8 + 6, fill=COL_OTHER, outline="")
-        cv.create_text(cx - dx_other, cy + 5, text="Gtr/Syn", fill=COL_OTHER, font=("Segoe UI", 7))
-        cv.create_text(cx + dx_other, cy + 5, text="Gtr/Syn", fill=COL_OTHER, font=("Segoe UI", 7))
-
-        # 4. Backing / 3D Objects (Pink/Magenta Glow) - Rear Envelope / Orbit
-        dx_back = int(50 * spread_mult)
-        dy_back = int(44 * spread_mult)
-        # Halos
-        cv.create_oval(cx - dx_back - 8, cy + dy_back - 8, cx - dx_back + 8, cy + dy_back + 8, fill="#3b1b2f", outline="")
-        cv.create_oval(cx + dx_back - 8, cy + dy_back - 8, cx + dx_back + 8, cy + dy_back + 8, fill="#3b1b2f", outline="")
-        cv.create_oval(cx - dx_back - 5, cy + dy_back - 5, cx - dx_back + 5, cy + dy_back + 5, fill=COL_BACKING, outline="")
-        cv.create_oval(cx + dx_back - 5, cy + dy_back - 5, cx + dx_back + 5, cy + dy_back + 5, fill=COL_BACKING, outline="")
-        cv.create_text(cx, cy + dy_back + 10, text="3D Backing / Objects", fill=COL_BACKING, font=("Segoe UI", 8, "bold"))
-
-        # 360° Orbit trajectory circle when Atmos objects active
-        if hasattr(self, "adm_objects") and self.adm_objects.get() == "on":
-            cv.create_oval(cx - 68, cy - 68, cx + 68, cy + 68, outline=COL_BACKING, dash=(3, 4), width=1)
-
-    # ------------------------------------------------------------ 3. Advanced 4-Tab Section
-    def _build_advanced_section(self, body):
-        self._adv_open = False
-        self.adv_btn = ttk.Button(body, text="▸  Advanced Settings  (AI models, 3D Atmos, acoustic balance, routing)",
-                                  style="Link.TButton", command=self._toggle_adv)
-        self.adv_btn.pack(fill="x", pady=(0, 4))
-
-        self.adv = ttk.Frame(body, style="TFrame")
-
-        # 4-Tab Flat Notebook
-        self.adv_tabs = ttk.Notebook(self.adv)
-        self.adv_tabs.pack(fill="both", expand=True, pady=(4, 8))
-
-        # Tab 1: AI & Demucs
-        self._build_tab_ai(self.adv_tabs)
-
-        # Tab 2: 3D Atmos & Space
-        self._build_tab_atmos(self.adv_tabs)
-
-        # Tab 3: Balance & Levels
-        self._build_tab_balance(self.adv_tabs)
-
-        # Tab 4: Per-Instrument Matrix
-        self._build_tab_routing(self.adv_tabs)
-
-    def _toggle_adv(self):
-        self._adv_open = not self._adv_open
-        if self._adv_open:
-            self.adv.pack(fill="x", before=self.logframe, pady=(0, 8))
-            self.adv_btn.configure(text="▾  Advanced Settings  (AI models, 3D Atmos, acoustic balance, routing)")
-        else:
-            self.adv.pack_forget()
-            self.adv_btn.configure(text="▸  Advanced Settings  (AI models, 3D Atmos, acoustic balance, routing)")
-
-    def _build_tab_ai(self, notebook):
-        page = ttk.Frame(notebook, style="TFrame", padding=14)
-        notebook.add(page, text=" 🎛️ AI & Demucs ")
-
-        for c in range(3):
-            page.columnconfigure(c, weight=1, uniform="ai")
-
-        self.model, self._model_box = self._combo(
-            page, "Demucs Model", MODELS, "htdemucs_ft", 0, 0, TIPS["Demucs model"], cb=True)
-        self._reg("model", self.model)
-        self._model_box.bind("<<ComboboxSelected>>", lambda e: self._update_context())
-
-        self.split, self._split_box = self._combo(
-            page, "Split Vocals (Karaoke)", SPLIT, "auto", 0, 1, TIPS["Split vocals"], cb=True)
-        self._reg("split", self.split)
-        self._split_box.bind("<<ComboboxSelected>>", lambda e: self._update_context())
-
-        self.vocal = self._reg("vocal", self._combo(
-            page, "Vocal Haas/Double Mode", VOCAL, "auto", 0, 2, TIPS["Vocal mode"]))
-
-        self.vroles = self._reg("vroles", self._combo(
-            page, "Vocal Roles (Swap/Detect)", VROLES, "auto", 1, 0, TIPS["Vocal roles"]))
-
-        self.recover = self._reg("recover", self._combo(
-            page, "Detail Recovery (Master)", ["on", "off"], "on", 1, 1, TIPS["Detail recovery"]))
-
-    def _build_tab_atmos(self, notebook):
-        page = ttk.Frame(notebook, style="TFrame", padding=14)
-        notebook.add(page, text=" 🌌 3D Space & Atmos ")
-
-        for c in range(3):
-            page.columnconfigure(c, weight=1, uniform="at")
-
-        self.adm_objects, self._adm_obj_cb = self._combo(
-            page, "Discrete 3D Audio Objects", ["off", "on"], "off", 0, 0, TIPS["Atmos objects"], cb=True)
-        self._reg("adm_objects", self.adm_objects)
-        self._adm_obj_cb.bind("<<ComboboxSelected>>", lambda e: self._draw_stage())
-
-        self.decorr = self._reg("decorr", self._combo(
-            page, "Rear Decorrelation", ["on", "off"], "on", 0, 1, TIPS["Rear decorrelation"]))
-
-        # Smart 3D indicator pill
-        stat_box = ttk.Frame(page)
-        stat_box.grid(row=0, column=2, sticky="ew", padx=6, pady=4)
-        ttk.Label(stat_box, text="Smart 3D Motion Engine", style="Muted.TLabel").pack(anchor="w")
-        ttk.Label(stat_box, text="● 360° Orbit & Whisper Active", foreground=OK,
-                  font=("Segoe UI", 9, "bold")).pack(anchor="w", pady=(5, 0))
-
-        self.motion_mode = self._reg("motion_mode", self._combo(
-            page, "3D Motion Dynamics", ["dynamic", "expressive", "subtle"], "dynamic", 1, 0, TIPS["Motion mode"]))
-
-        self.motion_intensity = self._reg("motion_intensity", self._combo(
-            page, "Motion Travel Depth", ["1.0", "1.5", "2.0", "0.5"], "1.0", 1, 1, TIPS["Motion intensity"]))
-
-        # Binaural depth slider
-        brow = ttk.Frame(page)
-        brow.grid(row=2, column=0, columnspan=3, sticky="ew", padx=6, pady=(14, 2))
-        blab = ttk.Label(brow, text="Binaural Depth:", style="Muted.TLabel")
-        blab.pack(side="left")
-        self.binaural = self._reg("binaural", tk.DoubleVar(value=0))
-        self.binaural_lbl = tk.StringVar(value="off")
-        ttk.Label(brow, textvariable=self.binaural_lbl, style="Muted.TLabel", width=6).pack(side="right")
-        bsc = ttk.Scale(brow, from_=0, to=100, orient="horizontal",
-                        variable=self.binaural, command=self._on_binaural)
-        bsc.pack(side="left", fill="x", expand=True, padx=8)
-        ToolTip(blab, TIPS["Binaural depth"])
-        ToolTip(bsc, TIPS["Binaural depth"])
-
-    def _build_tab_balance(self, notebook):
-        page = ttk.Frame(notebook, style="TFrame", padding=14)
-        notebook.add(page, text=" ⚖️ Acoustic Balance ")
-
-        for c in range(3):
-            page.columnconfigure(c, weight=1, uniform="bal")
-
-        self.rear_gain = self._reg("rear_gain", self._entry(
-            page, "Rear Gain (dB)", "0", 0, 0, TIPS["Rear gain (dB)"]))
-        self.rear_below = self._reg("rear_below", self._entry(
-            page, "Rear Below Front (dB)", "", 0, 1, TIPS["Rear below front"]))
-        self.backing = self._reg("backing", self._entry(
-            page, "Backing Choir Gain (dB / auto)", "auto", 0, 2, TIPS["Backing gain"]))
-
-    def _build_tab_routing(self, notebook):
-        page = ttk.Frame(notebook, style="TFrame", padding=12)
-        notebook.add(page, text=" 📍 Instrument Routing ")
-
-        for c, txt in enumerate(("", "Zone", "Level dB", "Spread", "Ctr/LFE", "Mute", "Solo")):
-            ttk.Label(page, text=txt, style="Muted.TLabel").grid(
-                row=0, column=c, sticky="w", padx=6, pady=(0, 4))
-
-        self.place, self.level, self.mute, self.solo = {}, {}, {}, {}
-        self.spread, self.lfe, self.center = {}, {}, None
-        self._instr_widgets = {}
-
-        for i, stem in enumerate(INSTRUMENTS, start=1):
-            w = []
-            nl = ttk.Label(page, text=stem.capitalize(), style="Muted.TLabel", width=10)
-            nl.grid(row=i, column=0, sticky="w", padx=6, pady=3)
-            w.append(nl)
-
-            zv = tk.StringVar(value="auto")
-            zb = ttk.Combobox(page, textvariable=zv, state="readonly", width=8,
-                              values=["auto", "front", "side", "rear"])
-            zb.grid(row=i, column=1, sticky="w", padx=6)
-            zb.bind("<MouseWheel>", lambda e: "break")
-            zb.bind("<<ComboboxSelected>>", lambda e: self._draw_stage())
-            self.place[stem] = self._reg("place_" + stem, zv)
-            w.append(zb)
-
-            lv = tk.StringVar(value="0")
-            le = ttk.Entry(page, textvariable=lv, width=6)
-            le.grid(row=i, column=2, sticky="w", padx=6)
-            self.level[stem] = self._reg("level_" + stem, lv)
-            w.append(le)
-
-            if stem != "bass":
-                spv = tk.StringVar(value="")
-                se = ttk.Entry(page, textvariable=spv, width=6)
-                se.grid(row=i, column=3, sticky="w", padx=6)
-                self.spread[stem] = self._reg("spread_" + stem, spv)
-                w.append(se)
-
-            if stem == "vocals":
-                cv = tk.StringVar(value="")
-                ce = ttk.Entry(page, textvariable=cv, width=6)
-                ce.grid(row=i, column=4, sticky="w", padx=6)
-                self.center = self._reg("center_vocals", cv)
-                w.append(ce)
-            elif stem in ("bass", "drums"):
-                fv = tk.StringVar(value="")
-                fe = ttk.Entry(page, textvariable=fv, width=6)
-                fe.grid(row=i, column=4, sticky="w", padx=6)
-                self.lfe[stem] = self._reg("lfe_" + stem, fv)
-                w.append(fe)
-
-            mv = tk.BooleanVar(value=False)
-            mc = ttk.Checkbutton(page, variable=mv)
-            mc.grid(row=i, column=5, padx=12)
-            self.mute[stem] = self._reg("mute_" + stem, mv)
-            w.append(mc)
-
-            sv = tk.BooleanVar(value=False)
-            sc = ttk.Checkbutton(page, variable=sv)
-            sc.grid(row=i, column=6, padx=12)
-            self.solo[stem] = self._reg("solo_" + stem, sv)
-            w.append(sc)
-
-            self._instr_widgets[stem] = w
-
-        foot = ttk.Frame(page)
-        foot.grid(row=len(INSTRUMENTS) + 1, column=0, columnspan=7, sticky="ew", pady=(10, 0))
-        self.instr_detected = tk.StringVar(value="")
-        ttk.Label(foot, textvariable=self.instr_detected, style="Muted.TLabel").pack(side="left")
-        ttk.Button(foot, text="Reset Instruments", style="Link.TButton",
-                   command=self._reset_instruments).pack(side="right")
-
-        ToolTip(page, PLACE_TIP)
-
-    # ------------------------------------------------------------ 4. Live Log
-    def _build_log_section(self, body):
-        lw = self.logframe = ttk.Frame(body, style="Bg.TFrame")
-        lw.pack(fill="both", expand=True, pady=(4, 0))
-
-        log_head = ttk.Frame(lw, style="Bg.TFrame")
-        log_head.pack(fill="x", pady=(0, 6))
-        ttk.Label(log_head, text="LIVE CONSOLE & MONITOR", style="Header.TLabel",
-                  font=("Segoe UI", 9, "bold")).pack(side="left")
-        ttk.Button(log_head, text="Clear Log", style="Link.TButton",
-                   command=self._clear_log).pack(side="right")
-
-        self.log = tk.Text(lw, bg=LOG_BG, fg="#c8ccd2", insertbackground=FG,
-                           relief="flat", height=6, wrap="word", padx=12, pady=10,
-                           font=("Cascadia Mono", 10), highlightthickness=0, borderwidth=0)
-        self.log.pack(side="left", fill="both", expand=True)
-        lsb = ttk.Scrollbar(lw, command=self.log.yview)
-        lsb.pack(side="right", fill="y")
-        self.log.configure(yscrollcommand=lsb.set, state="disabled")
-
-    # ------------------------------------------------------------ helpers
-    def _combo(self, parent, label, values, default, r, c, tip=None, cb=False):
-        f = ttk.Frame(parent)
-        f.grid(row=r, column=c, sticky="ew", padx=6, pady=4)
-        lab = ttk.Label(f, text=label, style="Muted.TLabel")
-        lab.pack(anchor="w")
-        var = tk.StringVar(value=default)
-        box = ttk.Combobox(f, textvariable=var, values=values, state="readonly")
-        box.pack(fill="x", pady=(2, 0))
-        box.bind("<MouseWheel>", lambda e: "break")
-        if tip:
-            ToolTip(lab, tip)
-            ToolTip(box, tip)
-        return (var, box) if cb else var
-
-    def _entry(self, parent, label, default, r, c, tip=None):
-        f = ttk.Frame(parent)
-        f.grid(row=r, column=c, sticky="ew", padx=6, pady=4)
-        lab = ttk.Label(f, text=label, style="Muted.TLabel")
-        lab.pack(anchor="w")
-        var = tk.StringVar(value=default)
-        e = ttk.Entry(f, textvariable=var)
-        e.pack(fill="x", pady=(2, 0))
-        if tip:
-            ToolTip(lab, tip)
-            ToolTip(e, tip)
-        return var
-
-    def _on_output(self):
-        self.output_desc.set(OUTPUT_DESC.get(self.output.get(), ""))
-        self._draw_stage()
-
-    def _on_preset(self):
-        self.preset_desc.set(PRESET_DESC.get(self.preset.get(), ""))
-        self._update_meters()
-        self._draw_stage()
-
-    def _update_meters(self):
-        prof = PRESET_METERS.get(self.preset.get(), [])
-        for (lab, cv), (name, val) in zip(self._meters, prof):
-            lab.configure(text=name)
-            cv.delete("all")
-            w, h, gap = int(cv["width"]), int(cv["height"]), 3
-            seg = (w - 4 * gap) / 5.0
-            for i in range(5):
-                x0 = i * (seg + gap)
-                cv.create_rectangle(x0, 0, x0 + seg, h,
-                                    fill=ACCENT if i < val else INPUT_BG, outline="")
-
-    def _on_binaural(self, _=None):
-        v = int(float(self.binaural.get()))
-        self.binaural_lbl.set("off" if v < 1 else "%d%%" % v)
-
-    # ------------------------------------------------------------ folders
-    def _open_folder(self, path):
-        if path and os.path.isdir(path):
+        s.configure(".", background=PANEL, foreground=FG, fieldbackground=INPUT_BG, bordercolor=BORDER, darkcolor=PANEL, lightcolor=PANEL)
+        s.configure("TNotebook", background=BG, borderwidth=0)
+        s.configure("TNotebook.Tab", background=PANEL, foreground=MUTED, padding=[12, 6], font=("Segoe UI", 9))
+        s.map("TNotebook.Tab",
+              background=[("selected", CARD), ("active", INPUT_BG)],
+              foreground=[("selected", FG), ("active", FG)])
+
+        s.configure("TCombobox", fieldbackground=INPUT_BG, background=INPUT_BG, foreground=FG, arrowcolor=FG, borderwidth=1, relief="flat")
+        s.map("TCombobox", fieldbackground=[("readonly", INPUT_BG)], selectbackground=[("readonly", ACCENT)])
+
+        s.configure("Horizontal.TProgressbar", background=ACCENT, troughcolor=INPUT_BG, bordercolor=BORDER, lightcolor=ACCENT, darkcolor=ACCENT)
+
+    def _build_ui(self):
+        # 1. Header Bar
+        hdr = tk.Frame(self.root, bg=PANEL, height=48)
+        hdr.pack(fill=tk.X)
+
+        title_box = tk.Frame(hdr, bg=PANEL)
+        title_box.pack(side=tk.LEFT, padx=16, pady=10)
+        tk.Label(title_box, text="SURROUND UPMIX STUDIO", fg=FG, bg=PANEL, font=("Segoe UI", 11, "bold")).pack(side=tk.LEFT)
+        tk.Label(title_box, text="v2.0", fg=MUTED, bg=PANEL, font=("Segoe UI", 9)).pack(side=tk.LEFT, padx=(8, 0))
+
+        # 2. Splitter Body
+        main_body = tk.PanedWindow(self.root, orient=tk.HORIZONTAL, bg=BG, sashwidth=4, bd=0)
+        main_body.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+
+        left_frame = tk.Frame(main_body, bg=BG)
+        main_body.add(left_frame, minsize=580, width=640)
+
+        right_frame = tk.Frame(main_body, bg=BG)
+        main_body.add(right_frame, minsize=460, width=540)
+
+        self._build_left_panel(left_frame)
+        self._build_right_panel(right_frame)
+
+    def _build_left_panel(self, parent):
+        notebook = ttk.Notebook(parent)
+        notebook.pack(fill=tk.BOTH, expand=True)
+
+        tab_queue = tk.Frame(notebook, bg=CARD)
+        tab_routing = tk.Frame(notebook, bg=CARD)
+        tab_spatial = tk.Frame(notebook, bg=CARD)
+        tab_separation = tk.Frame(notebook, bg=CARD)
+        tab_binaural = tk.Frame(notebook, bg=CARD)
+        tab_output = tk.Frame(notebook, bg=CARD)
+
+        notebook.add(tab_queue, text="Queue")
+        notebook.add(tab_routing, text="Stem Placement")
+        notebook.add(tab_spatial, text="Spatial Engine")
+        notebook.add(tab_separation, text="Separation & AI")
+        notebook.add(tab_binaural, text="Binaural Matrix")
+        notebook.add(tab_output, text="Output & Settings")
+
+        self._build_tab_queue(tab_queue)
+        self._build_tab_routing(tab_routing)
+        self._build_tab_spatial(tab_spatial)
+        self._build_tab_separation(tab_separation)
+        self._build_tab_binaural(tab_binaural)
+        self._build_tab_output(tab_output)
+
+    # ---------------------------------------------------- TAB 1: QUEUE
+    def _build_tab_queue(self, parent):
+        btn_bar = tk.Frame(parent, bg=CARD)
+        btn_bar.pack(fill=tk.X, padx=12, pady=10)
+
+        tk.Button(btn_bar, text="+ Add Files", bg=ACCENT, fg=FG, activebackground=ACCENT_HOVER, bd=0, padx=12, pady=5, font=("Segoe UI", 9, "bold"), command=self._add_files).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(btn_bar, text="+ Add Folder", bg=INPUT_BG, fg=FG, bd=0, padx=12, pady=5, font=("Segoe UI", 9), command=self._add_directory).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(btn_bar, text="+ Add Multitrack", bg=INPUT_BG, fg=FG, bd=0, padx=12, pady=5, font=("Segoe UI", 9), command=self._add_multitrack).pack(side=tk.LEFT, padx=(0, 6))
+        tk.Button(btn_bar, text="Clear Queue", bg=INPUT_BG, fg=MUTED, bd=0, padx=10, pady=5, command=self._clear_queue).pack(side=tk.LEFT)
+
+        list_frame = tk.Frame(parent, bg=PANEL, bd=1, relief=tk.FLAT)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 8))
+
+        self.queue_listbox = tk.Listbox(list_frame, bg=PANEL, fg=FG, selectbackground=ACCENT, selectforeground=FG, bd=0, highlightthickness=0, font=("Segoe UI", 9))
+        self.queue_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self.queue_listbox.bind("<<ListboxSelect>>", self._on_select_queue_item)
+
+        sb = tk.Scrollbar(list_frame, orient=tk.VERTICAL, command=self.queue_listbox.yview, bg=PANEL)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self.queue_listbox.config(yscrollcommand=sb.set)
+
+        # Metadata Card
+        meta_card = tk.LabelFrame(parent, text="Track Metadata", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        meta_card.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        meta_body = tk.Frame(meta_card, bg=CARD)
+        meta_body.pack(fill=tk.X, padx=10, pady=8)
+
+        fields_frame = tk.Frame(meta_body, bg=CARD)
+        fields_frame.pack(fill=tk.X, expand=True)
+
+        f1 = tk.Frame(fields_frame, bg=CARD)
+        f1.pack(fill=tk.X, pady=2)
+        tk.Label(f1, text="Artist:", fg=MUTED, bg=CARD, width=8, anchor="w").pack(side=tk.LEFT)
+        self.ent_artist = tk.Entry(f1, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_artist.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        f2 = tk.Frame(fields_frame, bg=CARD)
+        f2.pack(fill=tk.X, pady=2)
+        tk.Label(f2, text="Title:", fg=MUTED, bg=CARD, width=8, anchor="w").pack(side=tk.LEFT)
+        self.ent_title = tk.Entry(f2, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_title.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        f3 = tk.Frame(fields_frame, bg=CARD)
+        f3.pack(fill=tk.X, pady=2)
+        tk.Label(f3, text="Album:", fg=MUTED, bg=CARD, width=8, anchor="w").pack(side=tk.LEFT)
+        self.ent_album = tk.Entry(f3, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_album.pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        f4 = tk.Frame(fields_frame, bg=CARD)
+        f4.pack(fill=tk.X, pady=2)
+        tk.Label(f4, text="Track #:", fg=MUTED, bg=CARD, width=8, anchor="w").pack(side=tk.LEFT)
+        self.ent_track = tk.Entry(f4, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0, width=5)
+        self.ent_track.pack(side=tk.LEFT)
+        tk.Label(f4, text="Year:", fg=MUTED, bg=CARD, width=5, anchor="e").pack(side=tk.LEFT, padx=(8, 4))
+        self.ent_year = tk.Entry(f4, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0, width=7)
+        self.ent_year.pack(side=tk.LEFT)
+        tk.Button(f4, text="Save Metadata", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, command=self._save_meta_to_selected).pack(side=tk.RIGHT)
+
+    # ---------------------------------------------------- TAB 2: STEM PLACEMENT (ROUTING MATRIX)
+    def _build_tab_routing(self, parent):
+        box = tk.Frame(parent, bg=CARD)
+        box.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        hdr_frame = tk.Frame(box, bg=CARD)
+        hdr_frame.pack(fill=tk.X, pady=(0, 6))
+        tk.Label(hdr_frame, text="Acoustic Zone & Stem Routing Matrix", font=("Segoe UI", 10, "bold"), fg=FG, bg=CARD).pack(side=tk.LEFT)
+        tk.Button(hdr_frame, text="Reset Defaults", bg=INPUT_BG, fg=MUTED, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=self._reset_stem_routing).pack(side=tk.RIGHT)
+
+        desc = tk.Label(box, text="Assign acoustic placement, gain trim, surround width, and speaker anchors per instrument stem.", fg=MUTED, bg=CARD, font=("Segoe UI", 8))
+        desc.pack(anchor="w", pady=(0, 10))
+
+        # Single Grid Table Container ensures pixel-perfect column alignment
+        tbl = tk.Frame(box, bg=CARD)
+        tbl.pack(fill=tk.X, pady=(0, 8))
+
+        tbl.columnconfigure(0, weight=2)
+        tbl.columnconfigure(1, weight=2)
+        tbl.columnconfigure(2, weight=1)
+        tbl.columnconfigure(3, weight=1)
+        tbl.columnconfigure(4, weight=1)
+        tbl.columnconfigure(5, weight=1)
+        tbl.columnconfigure(6, weight=1)
+
+        # Table Header
+        headers = [("Stem", "w"), ("Acoustic Zone", "w"), ("Gain dB", "w"), ("Width", "w"), ("Ctr / LFE", "w"), ("Mute", "center"), ("Solo", "center")]
+        for c, (txt, anch) in enumerate(headers):
+            h_lbl = tk.Label(tbl, text=txt, fg=MUTED, bg=PANEL, font=("Segoe UI", 8, "bold"), anchor=anch, padx=6, pady=4)
+            h_lbl.grid(row=0, column=c, sticky="ew", padx=2, pady=(0, 6))
+
+        zone_choices = ["auto", "front", "side", "rear", "heights", "orbit"]
+
+        # Table Rows
+        for r_idx, stem in enumerate(STEM_ROUTING_KEYS, start=1):
+            s_label = STEM_DISPLAY_NAMES.get(stem, stem.capitalize())
+            tk.Label(tbl, text=s_label, fg=FG, bg=CARD, font=("Segoe UI", 9), anchor="w").grid(row=r_idx, column=0, sticky="w", padx=6, pady=3)
+
+            # Zone Combobox
+            cb_zone = ttk.Combobox(tbl, textvariable=self.stem_vars[stem]["zone"], values=zone_choices, state="readonly", width=10)
+            cb_zone.grid(row=r_idx, column=1, sticky="ew", padx=3, pady=3)
+            cb_zone.bind("<<ComboboxSelected>>", lambda e: self._on_stem_zone_change())
+
+            # Level dB Entry
+            ent_lvl = tk.Entry(tbl, textvariable=self.stem_vars[stem]["level"], bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0, width=6)
+            ent_lvl.grid(row=r_idx, column=2, sticky="ew", padx=3, pady=3)
+
+            # Spread Entry
+            ent_spd = tk.Entry(tbl, textvariable=self.stem_vars[stem]["spread"], bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0, width=6)
+            ent_spd.grid(row=r_idx, column=3, sticky="ew", padx=3, pady=3)
+
+            # Center or LFE
+            ent_ctrlfe = tk.Entry(tbl, textvariable=self.stem_vars[stem]["ctrlfe"], bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0, width=6)
+            ent_ctrlfe.grid(row=r_idx, column=4, sticky="ew", padx=3, pady=3)
+
+            # Mute Checkbox
+            cb_mute = tk.Checkbutton(tbl, variable=self.stem_vars[stem]["mute"], bg=CARD, selectcolor=INPUT_BG, activebackground=CARD)
+            cb_mute.grid(row=r_idx, column=5, sticky="", padx=3, pady=3)
+
+            # Solo Checkbox
+            cb_solo = tk.Checkbutton(tbl, variable=self.stem_vars[stem]["solo"], bg=CARD, selectcolor=INPUT_BG, activebackground=CARD)
+            cb_solo.grid(row=r_idx, column=6, sticky="", padx=3, pady=3)
+
+    def _on_stem_zone_change(self):
+        zones = {stem: self.stem_vars[stem]["zone"].get() for stem in STEM_ROUTING_KEYS}
+        self.canvas_3d.update_stem_zones(zones)
+
+    def _reset_stem_routing(self):
+        for stem in STEM_ROUTING_KEYS:
+            self.stem_vars[stem]["zone"].set("auto")
+            self.stem_vars[stem]["level"].set("0.0")
+            self.stem_vars[stem]["spread"].set("auto")
+            self.stem_vars[stem]["ctrlfe"].set("")
+            self.stem_vars[stem]["mute"].set(False)
+            self.stem_vars[stem]["solo"].set(False)
+        self._on_stem_zone_change()
+
+    def _compile_overrides(self):
+        raw = {}
+        for stem in STEM_ROUTING_KEYS:
+            sv = self.stem_vars[stem]
+            entry = {}
+            z = sv["zone"].get().strip().lower()
+            if z in OVERRIDE_ZONES and z != "auto":
+                entry["zone"] = z
             try:
-                os.startfile(path)
-            except Exception:
-                self._append("! could not open %s\n" % path)
-
-    def _open_input(self):
-        sel = self.tree.selection() or self.tree.get_children()
-        if not sel:
-            self._append("! nothing to open (add something first)\n")
-            return
-        p = self.jobs.get(sel[0], {}).get("path", "")
-        self._open_folder(p if os.path.isdir(p) else os.path.dirname(p))
-
-    def _open_output(self):
-        od = self.outdir.get().strip()
-        if od:
-            self._open_folder(od)
-        else:
-            self._append("! output folder is blank (files go into an 'Output' folder next to each song)\n")
-
-    def _browse_out(self):
-        p = filedialog.askdirectory(title="Choose an output folder")
-        if p:
-            self.outdir.set(p)
-
-    def _refresh_counts(self):
-        n = len(self.jobs)
-        songs = sum(1 for j in self.jobs.values() if j["kind"] == "song")
-        stems = sum(1 for j in self.jobs.values() if j["kind"] == "stems")
-        if n == 0:
-            self.status.set("Ready")
-        else:
-            details = []
-            if songs: details.append(f"{songs} song" + ("s" if songs != 1 else ""))
-            if stems: details.append(f"{stems} stems folder" + ("s" if stems != 1 else ""))
-            self.status.set(f"{n} in queue ({', '.join(details)})")
-        self._update_context()
-
-    # ------------------------------------------------------------ queue ops
-    def _detect_instr_text(self, folder):
-        from surroundupmix.stemnames import folder_stem_map
-        from surroundupmix.io import find_stem
-        det = [nm for nm in INSTRUMENTS if find_stem(folder, nm)]
-        for nm in folder_stem_map(folder):
-            if nm not in det:
-                det.append(nm)
-        return ", ".join(det)
-
-    def _add_paths(self, paths):
-        added = 0
-        for path, kind in expand_inputs(paths):
-            if any(j["path"] == path for j in self.jobs.values()):
-                continue
-            base = os.path.basename(path.rstrip(os.sep))
-            if kind == "stems":
-                instr = self._detect_instr_text(path)
-                iid = self.tree.insert("", "end", tags=("queued", "stems_badge"),
-                                       values=(base, "🎛️ Stems", instr or "Stems", "⏳ queued"))
-            else:
-                iid = self.tree.insert("", "end", tags=("queued", "song_badge"),
-                                       values=(base, "🎵 Song", "Demucs AI Split", "⏳ queued"))
-            self.jobs[iid] = {"path": path, "kind": kind}
-            added += 1
-        self._refresh_counts()
-        if added == 0 and paths:
-            self._append("! nothing addable in that drop/selection\n")
-
-    def _add_one_stems_folder(self, folder):
-        if not folder or any(j["path"] == folder for j in self.jobs.values()):
-            return
-        base = os.path.basename(folder.rstrip(os.sep))
-        instr = self._detect_instr_text(folder)
-        iid = self.tree.insert("", "end", tags=("queued", "stems_badge"),
-                                values=(base, "🎛️ Stems", instr or "Stems", "⏳ queued"))
-        self.jobs[iid] = {"path": folder, "kind": "stems"}
-        self._refresh_counts()
-
-    def _add_files(self):
-        ps = filedialog.askopenfilenames(
-            title="Choose songs",
-            filetypes=[("Audio", " ".join("*" + e for e in sorted(AUDIO_EXT))),
-                       ("All files", "*.*")])
-        if ps:
-            self._add_paths(list(ps))
-
-    def _add_folder(self):
-        p = filedialog.askdirectory(title="Choose a folder (songs or stems)")
-        if p:
-            self._add_paths([p])
-
-    def _add_stems_folder(self):
-        p = filedialog.askdirectory(title="Choose a folder of stems (one song)")
-        if p:
-            self._add_one_stems_folder(p)
-
-    def _on_drop(self, event):
-        try:
-            paths = list(self.root.tk.splitlist(event.data))
-        except Exception:
-            paths = [event.data]
-        self._add_paths(paths)
-
-    def _move_up(self):
-        if self.running:
-            return
-        sel = self.tree.selection()
-        if not sel:
-            return
-        for iid in sel:
-            idx = self.tree.index(iid)
-            if idx > 0:
-                self.tree.move(iid, "", idx - 1)
-
-    def _move_down(self):
-        if self.running:
-            return
-        sel = self.tree.selection()
-        if not sel:
-            return
-        for iid in reversed(sel):
-            idx = self.tree.index(iid)
-            children = self.tree.get_children()
-            if idx < len(children) - 1:
-                self.tree.move(iid, "", idx + 1)
-
-    def _remove_sel(self):
-        if self.running:
-            return
-        for iid in self.tree.selection():
-            self.tree.delete(iid)
-            self.jobs.pop(iid, None)
-        self._refresh_counts()
-
-    def _clear_queue(self):
-        if self.running:
-            return
-        for iid in list(self.jobs):
-            self.tree.delete(iid)
-        self.jobs.clear()
-        self._refresh_counts()
-
-    # ------------------------------------------------------------ per-instrument
-    def _set_enabled(self, w, on):
-        try:
-            w.configure(state=("readonly" if isinstance(w, ttk.Combobox) else "normal")
-                        if on else "disabled")
-        except Exception:
-            pass
-
-    def _target_instruments(self):
-        det = {"bass", "drums", "vocals", "other"}
-        if self.model.get() == "htdemucs_6s":
-            det |= {"guitar", "piano"}
-        if self.split.get() != "off":
-            det.add("backing")
-        return det
-
-    def _update_context(self):
-        try:
-            det = self._target_instruments()
-        except Exception:
-            return
-        for stem, widgets in getattr(self, "_instr_widgets", {}).items():
-            on = stem in det
-            for wdg in widgets:
-                if isinstance(wdg, ttk.Label):
-                    wdg.configure(foreground=(FG if on else BORDER))
-                else:
-                    self._set_enabled(wdg, on)
-        if hasattr(self, "instr_detected"):
-            live = ", ".join(s for s in INSTRUMENTS if s in det)
-            self.instr_detected.set("Active stems in session: " + (live or "-"))
-
-    def _reset_instruments(self):
-        for stem in INSTRUMENTS:
-            self.place[stem].set("auto")
-            self.level[stem].set("0")
-            self.mute[stem].set(False)
-            self.solo[stem].set(False)
-            if stem in self.spread:
-                self.spread[stem].set("")
-            if stem in self.lfe:
-                self.lfe[stem].set("")
-        if self.center is not None:
-            self.center.set("")
-        self._update_context()
-        self._draw_stage()
-
-    def _overrides_dict(self):
-        soloed = [s for s in INSTRUMENTS if self.solo[s].get()]
-        def num(var):
-            try:
-                return float(var.get().strip().replace(",", "."))
-            except (ValueError, AttributeError):
-                return None
-        out = {}
-        for stem in INSTRUMENTS:
-            d = {}
-            z = self.place[stem].get()
-            if z and z != "auto":
-                d["zone"] = z
-            lv = num(self.level[stem])
-            if lv:
-                d["level"] = lv
-            if stem in self.spread:
-                sp = num(self.spread[stem])
-                if sp is not None:
-                    d["spread"] = sp
-            if stem == "vocals" and self.center is not None:
-                c = num(self.center)
-                if c is not None:
-                    d["center"] = c
-            if stem in self.lfe:
-                lf = num(self.lfe[stem])
-                if lf is not None:
-                    d["lfe"] = lf
-            if self.mute[stem].get() or (soloed and stem not in soloed):
-                d["mute"] = True
-            if d:
-                out[stem] = d
-        return out
-
-    def _write_overrides(self):
-        ov = self._overrides_dict()
-        if not ov:
-            self._ovr_path = None
-            return
-        try:
-            path = os.path.join(tempfile.gettempdir(), "surroundupmix_overrides.json")
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(ov, f)
-            self._ovr_path = path
-        except Exception:
-            self._ovr_path = None
-
-    # ------------------------------------------------------------ command generation
-    def _cmd_for(self, job):
-        py = sys.executable
-        path, kind = job["path"], job["kind"]
-        out = self.output.get()
-        all_obj = (out == "Dolby Atmos (20ch Objects)")
-        atmos = (out == "Dolby Atmos")
-        admr = (out == "ADM BWF")
-        fmt = "7.1.2" if (atmos or admr or all_obj) else out
-
-        common = ["--format", fmt, "--preset", self.preset.get(),
-                  "--vocal-mode", self.vocal.get(),
-                  "--backing-gain", self.backing.get().strip() or "auto"]
-
-        if self.decorr.get() == "off":
-            common += ["--decorrelate", "off"]
-        if self.vroles.get() != "auto":
-            common += ["--vocal-roles", self.vroles.get()]
-        if self.recover.get() == "off":
-            common += ["--recover-detail", "off"]
-        if int(float(self.binaural.get())) > 0:
-            common += ["--binaural", str(int(float(self.binaural.get())))]
-
-        if kind == "song":
-            cmd = [py, os.path.join(HERE, "allinone.py"), path,
-                   "--device", self.device.get(), "--model", self.model.get(),
-                   "--split-vocals", self.split.get()] + common
-        else:
-            cmd = [py, os.path.join(HERE, "upmix.py"), path,
-                   "--split-vocals", self.split.get()] + common
-
-        rg = self.rear_gain.get().strip()
-        if rg:
-            cmd += ["--rear-gain", rg]
-        rb = self.rear_below.get().strip()
-        if rb:
-            cmd += ["--rear-below-front", rb]
-        od = self.outdir.get().strip()
-        if od:
-            cmd += ["--out-dir", od]
-        if getattr(self, "_ovr_path", None):
-            cmd += ["--overrides", self._ovr_path]
-        if all_obj:
-            cmd += ["--adm", "--all-objects", "--adm-objects"]
-        elif atmos:
-            cmd += ["--adm"]
-        elif admr:
-            cmd += ["--adm", "--adm-order", "renderer"]
-        if (atmos or admr) and hasattr(self, "adm_objects") and self.adm_objects.get() == "on":
-            cmd += ["--adm-objects"]
-        if (all_obj or ((atmos or admr) and hasattr(self, "adm_objects") and self.adm_objects.get() == "on")):
-            if hasattr(self, "motion_mode") and self.motion_mode.get():
-                cmd += ["--motion-mode", self.motion_mode.get()]
-            if hasattr(self, "motion_intensity") and self.motion_intensity.get():
-                cmd += ["--motion-intensity", self.motion_intensity.get()]
-
-        return cmd
-
-    # ------------------------------------------------------------ worker & execution
-    def _start(self):
-        if self.running:
-            return
-        self._save_cfg()
-        self._write_overrides()
-
-        pending = [iid for iid in self.tree.get_children()
-                   if self.tree.set(iid, "status").endswith("queued")
-                   or self.tree.set(iid, "status").endswith("failed")]
-        if not pending:
-            self._append("! Queue is empty (add songs or stems first)\n")
-            return
-
-        self.running = True
-        self.stop_flag = False
-        self.start_btn.configure(state="disabled")
-        self.stop_btn.configure(state="normal")
-        self._clear_log()
-        threading.Thread(target=self._worker, args=(pending,), daemon=True).start()
-
-    def _worker(self, pending):
-        total = len(pending)
-        done = 0
-        for i, iid in enumerate(pending, 1):
-            if self.stop_flag:
-                break
-            job = self.jobs.get(iid)
-            if not job:
-                continue
-
-            base = os.path.basename(job["path"].rstrip(os.sep))
-            self.q.put(("status", iid, "running"))
-            self.q.put(("stage", f"[{i}/{total}] {base}"))
-
-            cmd = self._cmd_for(job)
-            self.q.put(("log", f"\n=== [{i}/{total}] {base} ===\n$ {' '.join(cmd)}\n\n"))
-
-            code = self._run_one(cmd, base)
-            if self.stop_flag and code != 0:
-                self.q.put(("status", iid, "queued"))
-                break
-            if code == 0:
-                self.q.put(("status", iid, "done"))
-                done += 1
-            else:
-                self.q.put(("status", iid, "failed"))
-
-        self.q.put(("done_all", done, total))
-
-    def _run_one(self, cmd, base):
-        try:
-            self.q.put(("progress", 0))
-            sub_env = dict(os.environ)
-            sub_env["PYTHONIOENCODING"] = "utf-8"
-            sub_env["PYTHONUTF8"] = "1"
-            self.proc = subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", bufsize=1, cwd=HERE, env=sub_env)
-
-            current_step = "Processing"
-            for line in self.proc.stdout:
-                self.q.put(("log", line))
-
-                # Multi-stage parsing
-                if "separating" in line.lower() or "demucs" in line.lower():
-                    current_step = "AI Separation"
-                elif "karaoke" in line.lower() or "vocal" in line.lower():
-                    current_step = "Vocal Splitting"
-                elif "motion" in line.lower() or "adm" in line.lower() or "upmix" in line.lower():
-                    current_step = "3D Mastering"
-
-                self.q.put(("stage", f"{base} · {current_step}"))
-
-                m = re.search(r"(\d{1,3})%", line)
-                if m:
-                    pct = int(m.group(1))
-                    if 0 <= pct <= 100:
-                        self.q.put(("progress", pct))
-
-            self.proc.wait()
-            self.q.put(("progress", 100 if self.proc.returncode == 0 else 0))
-            return self.proc.returncode
-        except Exception as e:
-            self.q.put(("log", f"\n! failed to launch: {e}\n"))
-            self.q.put(("progress", 0))
-            return -1
-        finally:
-            self.proc = None
-
-    def _stop(self):
-        self.stop_flag = True
-        if self.proc is not None:
-            try:
-                self.proc.terminate()
-                self._append("\n! Stopping queue after current task…\n")
-            except Exception:
+                lv = float(sv["level"].get().strip())
+                if lv != 0.0:
+                    entry["level"] = lv
+            except ValueError:
                 pass
+            if sv["mute"].get():
+                entry["mute"] = True
+            sp = sv["spread"].get().strip().lower()
+            if sp and sp != "auto":
+                try:
+                    entry["spread"] = float(sp)
+                except ValueError:
+                    pass
+            cl = sv["ctrlfe"].get().strip()
+            if cl:
+                try:
+                    val = float(cl)
+                    if stem == "vocals":
+                        entry["center"] = val
+                    elif stem in ("bass", "drums"):
+                        entry["lfe"] = val
+                except ValueError:
+                    pass
+            if entry:
+                raw[stem] = entry
+        return normalize_overrides(raw)
 
-    # ------------------------------------------------------------ ui drain loop
-    _STATUS_TEXT = {"queued": "⏳ queued", "running": "▶ running",
-                    "done": "✓ done", "failed": "✗ failed"}
+    # ---------------------------------------------------- TAB 3: SPATIAL ENGINE
+    def _build_tab_spatial(self, parent):
+        box = tk.Frame(parent, bg=CARD)
+        box.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
 
-    def _drain(self):
-        try:
-            while True:
-                item = self.q.get_nowait()
-                tag = item[0]
-                if tag == "log":
-                    self._append(item[1])
-                elif tag == "stage":
-                    self.stage_lbl.set(item[1])
-                elif tag == "progress":
-                    _, val = item
-                    if hasattr(self, "prog"):
-                        self.prog["value"] = val
-                elif tag == "status":
-                    _, iid, state = item
-                    if self.tree.exists(iid):
-                        self.tree.set(iid, "status", self._STATUS_TEXT[state])
-                        self.tree.item(iid, tags=(state,))
-                elif tag == "done_all":
-                    _, done, total = item
-                    self.running = False
-                    self.start_btn.configure(state="normal")
-                    self.stop_btn.configure(state="disabled")
-                    if hasattr(self, "prog"):
-                        self.prog["value"] = 0
-                    self.stage_lbl.set("")
-                    self.status.set(f"Finished: {done}/{total} done")
-                    self._append(f"\n✓ Queue finished: {done}/{total} succeeded\n")
-        except queue.Empty:
-            pass
-        self.root.after(80, self._drain)
+        # Acoustic Preset
+        p_row = tk.Frame(box, bg=CARD)
+        p_row.pack(fill=tk.X, pady=6)
+        tk.Label(p_row, text="Acoustic Preset:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_preset = ttk.Combobox(p_row, textvariable=self.var_preset, values=PRESETS, state="readonly", width=18)
+        cb_preset.pack(side=tk.LEFT)
 
-    def _append(self, text):
-        self.log.configure(state="normal")
-        self.log.insert("end", text)
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        # 3D Motion Mode
+        m_row = tk.Frame(box, bg=CARD)
+        m_row.pack(fill=tk.X, pady=6)
+        tk.Label(m_row, text="3D Motion Mode:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_motion = ttk.Combobox(m_row, textvariable=self.var_motion, values=MOTION_MODES, state="readonly", width=18)
+        cb_motion.pack(side=tk.LEFT)
+
+        # Motion Intensity
+        i_row = tk.Frame(box, bg=CARD)
+        i_row.pack(fill=tk.X, pady=6)
+        tk.Label(i_row, text="Motion Intensity:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        scale_intensity = tk.Scale(i_row, variable=self.var_intensity, from_=0.2, to=2.0, resolution=0.1, orient=tk.HORIZONTAL, bg=CARD, fg=FG, highlightthickness=0, bd=0, length=200)
+        scale_intensity.pack(side=tk.LEFT)
+
+        tk.Frame(box, height=1, bg=BORDER).pack(fill=tk.X, pady=12)
+
+        # Decorrelation
+        cb_decorr = tk.Checkbutton(box, text="Phase-Safe Surround & Height Decorrelation (enveloping room acoustics)", variable=self.var_decorr, fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG)
+        cb_decorr.pack(anchor="w", pady=3)
+
+        # Detail Recovery
+        cb_detail = tk.Checkbutton(box, text="Detail Recovery (Reinjects high-frequency air & micro-transients)", variable=self.var_detail, fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG)
+        cb_detail.pack(anchor="w", pady=3)
+
+        # Binaural Depth
+        b_row = tk.Frame(box, bg=CARD)
+        b_row.pack(fill=tk.X, pady=8)
+        tk.Label(b_row, text="Binaural Cue Depth:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        scale_bin = tk.Scale(b_row, variable=self.var_binaural, from_=0, to=100, resolution=5, orient=tk.HORIZONTAL, bg=CARD, fg=FG, highlightthickness=0, bd=0, length=200)
+        scale_bin.pack(side=tk.LEFT)
+
+    # ---------------------------------------------------- TAB 4: SEPARATION & AI
+    def _build_tab_separation(self, parent):
+        box = tk.Frame(parent, bg=CARD)
+        box.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # Stem Model
+        s_row = tk.Frame(box, bg=CARD)
+        s_row.pack(fill=tk.X, pady=6)
+        tk.Label(s_row, text="Demucs Stem Model:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_smodel = ttk.Combobox(s_row, textvariable=self.var_sep_model, values=["htdemucs_6s", "htdemucs_ft"], state="readonly", width=16)
+        cb_smodel.pack(side=tk.LEFT)
+        tk.Label(s_row, text="htdemucs_6s = 6 stems (drums, bass, guitar, piano, vocals, other)", fg=MUTED, bg=CARD, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=10)
+
+        # Vocal Split
+        v_row = tk.Frame(box, bg=CARD)
+        v_row.pack(fill=tk.X, pady=6)
+        tk.Label(v_row, text="Vocal Separation:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_split = ttk.Combobox(v_row, textvariable=self.var_split, values=SPLIT_OPTIONS, state="readonly", width=16)
+        cb_split.pack(side=tk.LEFT)
+        tk.Label(v_row, text="Separates lead vocals from backing harmonies", fg=MUTED, bg=CARD, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=10)
+
+        # Multitrack Vocal Split
+        mv_row = tk.Frame(box, bg=CARD)
+        mv_row.pack(fill=tk.X, pady=4)
+        tk.Label(mv_row, text="Multitrack Vocals:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_force = tk.Checkbutton(mv_row, text="Split single multitrack vocal stems into Lead & Backing", variable=self.var_force_vocal_split, fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG)
+        cb_force.pack(side=tk.LEFT)
+
+        # Sub-Drum Separation
+        d_row = tk.Frame(box, bg=CARD)
+        d_row.pack(fill=tk.X, pady=6)
+        tk.Label(d_row, text="Sub-Drum Separation:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold"), width=18, anchor="w").pack(side=tk.LEFT)
+        cb_drums = tk.Checkbutton(d_row, text="DrumSep (Separate Kick, Snare, Cymbals & Toms)", variable=self.var_split_drums, fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG)
+        cb_drums.pack(side=tk.LEFT)
+
+    # ---------------------------------------------------- TAB 5: BINAURAL MATRIX
+    def _build_tab_binaural(self, parent):
+        top_bar = tk.Frame(parent, bg=CARD)
+        top_bar.pack(fill=tk.X, padx=12, pady=10)
+
+        tk.Label(top_bar, text="Binaural Matrix Preset:", fg=FG, bg=CARD, font=("Segoe UI", 9, "bold")).pack(side=tk.LEFT)
+        self.var_bin_preset = tk.StringVar(value="punchy_direct")
+        cb_bpreset = ttk.Combobox(top_bar, textvariable=self.var_bin_preset, values=list(PRESET_MATRICES.keys()), state="readonly", width=18)
+        cb_bpreset.pack(side=tk.LEFT, padx=8)
+        cb_bpreset.bind("<<ComboboxSelected>>", self._apply_binaural_preset)
+
+        desc = tk.Label(parent, text="Configures Dolby Atmos headphone binaural render mode (Off, Near, Mid, Far) per 3D audio object.", fg=MUTED, bg=CARD, font=("Segoe UI", 8))
+        desc.pack(anchor="w", padx=12, pady=(0, 8))
+
+        matrix_frame = tk.Frame(parent, bg=CARD)
+        matrix_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 10))
+
+        cols = 2
+        for i, item in enumerate(OBJECT_KEYS):
+            r = i // cols
+            c = (i % cols) * 2
+
+            if isinstance(item, (tuple, list)):
+                key, lbl_text = item[0], item[1]
+            else:
+                key = item
+                lbl_text = key.replace("_", " ").title()
+
+            tk.Label(matrix_frame, text=lbl_text, fg=FG, bg=CARD, font=("Segoe UI", 9), anchor="w").grid(row=r, column=c, sticky="w", padx=8, pady=4)
+
+            cb = ttk.Combobox(matrix_frame, textvariable=self.binaural_vars[key], values=BINAURAL_MODES, state="readonly", width=8)
+            cb.grid(row=r, column=c+1, sticky="w", padx=4, pady=4)
+
+    def _apply_binaural_preset(self, event=None):
+        preset_name = self.var_bin_preset.get()
+        m = get_default_matrix(preset_name)
+        for k, v in m.items():
+            if k in self.binaural_vars:
+                self.binaural_vars[k].set(v)
+
+    def _get_current_binaural_matrix(self):
+        res = {}
+        for item in OBJECT_KEYS:
+            key = item[0] if isinstance(item, (tuple, list)) else item
+            if key in self.binaural_vars:
+                res[key] = self.binaural_vars[key].get()
+        return res
+
+    # ---------------------------------------------------- TAB 6: OUTPUT & SETTINGS
+    def _build_tab_output(self, parent):
+        box = tk.Frame(parent, bg=CARD)
+        box.pack(fill=tk.BOTH, expand=True, padx=12, pady=10)
+
+        # Output Folder Card
+        out_card = tk.LabelFrame(box, text="Destination Output Folder", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        out_card.pack(fill=tk.X, pady=(0, 10))
+
+        f_row = tk.Frame(out_card, bg=CARD)
+        f_row.pack(fill=tk.X, padx=10, pady=8)
+
+        self.ent_custom_out = tk.Entry(f_row, textvariable=self.var_custom_output, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_custom_out.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+
+        tk.Button(f_row, text="Browse...", bg=ACCENT, fg=FG, bd=0, padx=10, pady=3, font=("Segoe UI", 8, "bold"), command=self._browse_output_dir).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(f_row, text="Open Folder", bg=INPUT_BG, fg=FG, bd=0, padx=10, pady=3, font=("Segoe UI", 8), command=self._open_output_dir).pack(side=tk.LEFT)
+
+        out_hint = tk.Label(out_card, text="Leave blank to automatically save into an 'Output' folder next to the source audio file.", fg=MUTED, bg=CARD, font=("Segoe UI", 8))
+        out_hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+        # Master Output Formats Card (DAW Checkbox Style - Weg B)
+        fmt_card = tk.LabelFrame(box, text="Master Output Formats", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        fmt_card.pack(fill=tk.X, pady=(0, 10))
+
+        fmt_body = tk.Frame(fmt_card, bg=CARD)
+        fmt_body.pack(fill=tk.X, padx=12, pady=8)
+
+        # 1. E-AC-3 JOC
+        self.cb_format_ec3 = tk.Checkbutton(
+            fmt_body,
+            text="Dolby Atmos E-AC-3 JOC (.m4a Bitstream for AVR, Apple TV & Streaming)",
+            variable=self.var_export_ec3,
+            fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG,
+            font=("Segoe UI", 9)
+        )
+        self.cb_format_ec3.pack(anchor="w", pady=3)
+
+        # 2. ADM BWF Master
+        self.cb_format_adm = tk.Checkbutton(
+            fmt_body,
+            text="30-Channel Dolby Atmos ADM BWF Master (.wav for Studio One, Pro Tools, Logic Pro)",
+            variable=self.var_export_adm,
+            fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG,
+            font=("Segoe UI", 9)
+        )
+        self.cb_format_adm.pack(anchor="w", pady=3)
+
+        # 3. 7.1.2 Discrete
+        self.cb_format_712 = tk.Checkbutton(
+            fmt_body,
+            text="7.1.2 Discrete Multichannel (.wav with 2 Height Channels)",
+            variable=self.var_export_712,
+            fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG,
+            font=("Segoe UI", 9)
+        )
+        self.cb_format_712.pack(anchor="w", pady=3)
+
+        # 4. 5.1 Surround
+        self.cb_format_51 = tk.Checkbutton(
+            fmt_body,
+            text="5.1 Standard Surround Sound (.wav)",
+            variable=self.var_export_51,
+            fg=FG, bg=CARD, selectcolor=INPUT_BG, activebackground=CARD, activeforeground=FG,
+            font=("Segoe UI", 9)
+        )
+        self.cb_format_51.pack(anchor="w", pady=3)
+
+        # External Tools & Engines (Optional)
+        ext_card = tk.LabelFrame(box, text="External Tools & Engines (Optional)", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        ext_card.pack(fill=tk.X, pady=(0, 10))
+
+        # 1. Dolby DEE Engine
+        dee_frame = tk.Frame(ext_card, bg=CARD)
+        dee_frame.pack(fill=tk.X, padx=10, pady=(8, 2))
+        tk.Label(dee_frame, text="Dolby DEE Engine:", fg=FG, bg=CARD, font=("Segoe UI", 9), width=16, anchor="w").pack(side=tk.LEFT)
+        self.ent_dee = tk.Entry(dee_frame, textvariable=self.var_dee_path, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_dee.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        tk.Button(dee_frame, text="Browse dee.exe...", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=self._browse_dee_exe).pack(side=tk.LEFT)
+
+        self.lbl_dee_status = tk.Label(ext_card, textvariable=self.var_dee_status, fg=MUTED, bg=CARD, font=("Segoe UI", 8))
+        self.lbl_dee_status.pack(anchor="w", padx=10, pady=(0, 2))
+        self._update_dee_status()
+
+        dee_hint = tk.Label(
+            ext_card,
+            text="Note: When dee.exe is provided, direct encoding to Dolby Digital Plus with Atmos (E-AC-3 JOC .m4a / .ec3) is enabled.",
+            fg=MUTED, bg=CARD, font=("Segoe UI", 8)
+        )
+        dee_hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+        # 2. Spatial VST3 Plugin
+        vst_frame = tk.Frame(ext_card, bg=CARD)
+        vst_frame.pack(fill=tk.X, padx=10, pady=(4, 2))
+        tk.Label(vst_frame, text="Spatial VST3 Insert:", fg=FG, bg=CARD, font=("Segoe UI", 9), width=16, anchor="w").pack(side=tk.LEFT)
+        self.cb_vst3_mode = ttk.Combobox(vst_frame, textvariable=self.var_vst3_mode, values=["Standard DSP (Built-in)", "Custom VST3 Plugin..."], state="readonly", width=24)
+        self.cb_vst3_mode.pack(side=tk.LEFT, padx=(0, 6))
+        self.cb_vst3_mode.bind("<<ComboboxSelected>>", self._on_vst3_mode_change)
+
+        self.ent_vst3 = tk.Entry(vst_frame, textvariable=self.var_vst3_path, bg=INPUT_BG, fg=FG, insertbackground=FG, bd=0)
+        self.ent_vst3.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 6))
+        self.btn_browse_vst3 = tk.Button(vst_frame, text="Browse .vst3...", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=self._browse_vst3)
+        self.btn_browse_vst3.pack(side=tk.LEFT)
+
+        vst_hint = tk.Label(ext_card, text="Default: Standard DSP. Point to any 64-bit spatial VST3 plugin (Halo Upmix, Penteo, etc.) for texture stems.", fg=MUTED, bg=CARD, font=("Segoe UI", 8))
+        vst_hint.pack(anchor="w", padx=10, pady=(0, 8))
+
+        # Hardware & Engine Card
+        hw_card = tk.LabelFrame(box, text="Processing Hardware", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        hw_card.pack(fill=tk.X, pady=(0, 10))
+
+        hw_row = tk.Frame(hw_card, bg=CARD)
+        hw_row.pack(fill=tk.X, padx=10, pady=8)
+        tk.Label(hw_row, text="Compute Device:", fg=FG, bg=CARD, font=("Segoe UI", 9), width=16, anchor="w").pack(side=tk.LEFT)
+        cb_dev = ttk.Combobox(hw_row, textvariable=self.var_device, values=["auto", "cuda", "cpu"], state="readonly", width=12)
+        cb_dev.pack(side=tk.LEFT)
+        tk.Label(hw_row, text="Auto selects NVIDIA CUDA GPU when available, with clean CPU fallback.", fg=MUTED, bg=CARD, font=("Segoe UI", 8)).pack(side=tk.LEFT, padx=10)
+
+    def _update_dee_status(self):
+        dp = self.var_dee_path.get().strip()
+        dee_found = (dp and Path(dp).is_file()) or config.is_dee_available()
+        if dp and Path(dp).is_file():
+            self.var_dee_status.set("Status: DEE detected -> Direct E-AC-3 JOC (.m4a / .ec3) bitstream export enabled")
+        elif config.is_dee_available():
+            self.var_dee_status.set("Status: DEE detected (local/system PATH) -> E-AC-3 JOC export enabled")
+        else:
+            self.var_dee_status.set("Status: Not connected -> Default 30-Channel ADM BWF Master (.wav for all DAWs) active")
+
+        if hasattr(self, "cb_format_ec3"):
+            if dee_found:
+                self.cb_format_ec3.config(state=tk.NORMAL)
+            else:
+                self.cb_format_ec3.config(state=tk.DISABLED)
+                self.var_export_ec3.set(False)
+
+    def _browse_dee_exe(self):
+        f = filedialog.askopenfilename(
+            title="Select Dolby Encoding Engine (dee.exe)",
+            filetypes=[("Executable Files", "*.exe"), ("All Files", "*.*")]
+        )
+        if f:
+            p = str(Path(f).resolve())
+            self.var_dee_path.set(p)
+            config.set_config_value("dee_path", p)
+            self._update_dee_status()
+
+    def _browse_vst3(self):
+        f = filedialog.askopenfilename(
+            title="Select 64-bit Spatial VST3 Plugin",
+            filetypes=[("VST3 Plugins", "*.vst3"), ("All Files", "*.*")]
+        )
+        if f:
+            p = str(Path(f).resolve())
+            self.var_vst3_path.set(p)
+            config.set_config_value("custom_vst3_path", p)
+            self.var_vst3_mode.set("Custom VST3 Plugin...")
+
+    def _on_vst3_mode_change(self, event=None):
+        pass
+
+    def _browse_output_dir(self):
+        d = filedialog.askdirectory(title="Select Output Folder")
+        if d:
+            self.var_custom_output.set(str(Path(d).resolve()))
+
+    def _open_output_dir(self):
+        p = self.var_custom_output.get().strip()
+        if not p:
+            p = str(BASE_DIR / "output")
+        Path(p).mkdir(parents=True, exist_ok=True)
+        if sys.platform == "win32":
+            os.startfile(p)
+
+    # ---------------------------------------------------- RIGHT PANEL (3D STAGE & LOGS)
+    def _build_right_panel(self, parent):
+        # 3D Soundstage Card
+        stage_card = tk.LabelFrame(parent, text="Studio Soundstage Preview (7.1.6 Anchors & Dynamic Stems)", font=("Segoe UI", 9, "bold"), fg=FG, bg=CARD, bd=1, relief=tk.SOLID)
+        stage_card.pack(fill=tk.BOTH, expand=False, pady=(0, 6))
+
+        # View Toolbar
+        view_bar = tk.Frame(stage_card, bg=CARD)
+        view_bar.pack(fill=tk.X, padx=8, pady=(4, 2))
+
+        tk.Button(view_bar, text="3D View", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=lambda: self.canvas_3d.set_view("3d")).pack(side=tk.LEFT, padx=2)
+        tk.Button(view_bar, text="Top 2D", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=lambda: self.canvas_3d.set_view("top")).pack(side=tk.LEFT, padx=2)
+        tk.Button(view_bar, text="Front", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=lambda: self.canvas_3d.set_view("front")).pack(side=tk.LEFT, padx=2)
+        tk.Button(view_bar, text="Side", bg=INPUT_BG, fg=FG, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=lambda: self.canvas_3d.set_view("side")).pack(side=tk.LEFT, padx=2)
+
+        self.btn_autorotate = tk.Button(view_bar, text="Auto-Rotate: OFF", bg=INPUT_BG, fg=MUTED, bd=0, padx=8, pady=2, font=("Segoe UI", 8), command=self._toggle_autorotate)
+        self.btn_autorotate.pack(side=tk.RIGHT, padx=2)
+
+        self.canvas_3d = Interactive3DSoundstage(stage_card, height=270)
+        self.canvas_3d.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+
+        # Action Execution Bar
+        act_bar = tk.Frame(parent, bg=PANEL)
+        act_bar.pack(fill=tk.X, pady=(0, 6))
+
+        self.btn_start = tk.Button(act_bar, text="Start Production", bg=GREEN, fg="#0b0c0e", activebackground="#3eb363", bd=0, padx=16, pady=8, font=("Segoe UI", 10, "bold"), command=self._start_processing)
+        self.btn_start.pack(side=tk.LEFT, padx=(0, 8))
+
+        self.btn_stop = tk.Button(act_bar, text="Stop", bg=INPUT_BG, fg=MUTED, bd=0, padx=12, pady=8, font=("Segoe UI", 9), state=tk.DISABLED, command=self._stop_processing)
+        self.btn_stop.pack(side=tk.LEFT)
+
+        # Progress Indicators
+        prog_box = tk.Frame(act_bar, bg=PANEL)
+        prog_box.pack(side=tk.RIGHT, fill=tk.X, expand=True, padx=(10, 0))
+
+        status_line = tk.Frame(prog_box, bg=PANEL)
+        status_line.pack(fill=tk.X)
+        self.lbl_stage = tk.Label(status_line, text="Ready", fg=FG, bg=PANEL, font=("Segoe UI", 8, "bold"))
+        self.lbl_stage.pack(side=tk.LEFT)
+        self.lbl_percent = tk.Label(status_line, text="0%", fg=MUTED, bg=PANEL, font=("Segoe UI", 8))
+        self.lbl_percent.pack(side=tk.RIGHT)
+
+        self.prog_bar = ttk.Progressbar(prog_box, style="Horizontal.TProgressbar", mode="determinate")
+        self.prog_bar.pack(fill=tk.X, pady=(2, 0))
+
+        # Console & Log Window
+        log_frame = tk.Frame(parent, bg=CONSOLE_BG, bd=1, relief=tk.SOLID)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+
+        log_head = tk.Frame(log_frame, bg=CONSOLE_BG)
+        log_head.pack(fill=tk.X, padx=6, pady=4)
+        tk.Label(log_head, text="LIVE CONSOLE & PRODUCTION MONITOR", fg=MUTED, bg=CONSOLE_BG, font=("Segoe UI", 8, "bold")).pack(side=tk.LEFT)
+        tk.Button(log_head, text="Clear", bg=CONSOLE_BG, fg=MUTED, bd=0, font=("Segoe UI", 7), command=self._clear_log).pack(side=tk.RIGHT)
+
+        self.txt_log = tk.Text(log_frame, bg=CONSOLE_BG, fg="#cfd3dc", insertbackground=FG, bd=0, font=("Consolas", 8), wrap=tk.WORD)
+        self.txt_log.pack(fill=tk.BOTH, expand=True, padx=6, pady=(0, 6))
+
+    def _toggle_autorotate(self):
+        active = self.canvas_3d.toggle_auto_rotate()
+        if active:
+            self.btn_autorotate.config(text="Auto-Rotate: ON", fg=GREEN, bg="#1a2e22")
+        else:
+            self.btn_autorotate.config(text="Auto-Rotate: OFF", fg=MUTED, bg=INPUT_BG)
 
     def _clear_log(self):
-        self.log.configure(state="normal")
-        self.log.delete("1.0", "end")
-        self.log.configure(state="disabled")
+        self.txt_log.delete("1.0", tk.END)
+
+    # ---------------------------------------------------- QUEUE MANAGEMENT
+    def _add_files(self):
+        files = filedialog.askopenfilenames(
+            title="Select Audio Files",
+            filetypes=[("Audio Files", "*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.aif *.aiff"), ("All Files", "*.*")]
+        )
+        for f in files:
+            p = Path(f).resolve()
+            meta = extract_metadata(p)
+            self.queue_items.append({"path": p, "meta": meta, "status": "Pending"})
+            self.queue_listbox.insert(tk.END, f"[Pending] {meta['artist']} - {meta['title']} ({p.name})")
+
+    def _add_directory(self):
+        d = filedialog.askdirectory(title="Select Folder with Audio Files")
+        if d:
+            valid_exts = {".wav", ".flac", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".aif", ".aiff"}
+            for f in sorted(Path(d).glob("*.*")):
+                if f.is_file() and f.suffix.lower() in valid_exts:
+                    meta = extract_metadata(f)
+                    self.queue_items.append({"path": f.resolve(), "meta": meta, "status": "Pending"})
+                    self.queue_listbox.insert(tk.END, f"[Pending] {meta['artist']} - {meta['title']} ({f.name})")
+
+    def _add_multitrack(self):
+        d = filedialog.askdirectory(title="Select Multitrack Stem Folder")
+        if d:
+            p = Path(d).resolve()
+            meta = extract_metadata(p)
+            self.queue_items.append({"path": p, "meta": meta, "status": "Pending"})
+            self.queue_listbox.insert(tk.END, f"[Pending] Multitrack: {p.name}")
+
+    def _clear_queue(self):
+        if not self.is_processing:
+            self.queue_items.clear()
+            self.queue_listbox.delete(0, tk.END)
+
+    def _on_select_queue_item(self, event):
+        sel = self.queue_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        meta = self.queue_items[idx]["meta"]
+        self.ent_artist.delete(0, tk.END)
+        self.ent_artist.insert(0, meta.get("artist", ""))
+        self.ent_title.delete(0, tk.END)
+        self.ent_title.insert(0, meta.get("title", ""))
+        self.ent_album.delete(0, tk.END)
+        self.ent_album.insert(0, meta.get("album", ""))
+        self.ent_track.delete(0, tk.END)
+        self.ent_track.insert(0, str(meta.get("track", 1)))
+        self.ent_year.delete(0, tk.END)
+        self.ent_year.insert(0, str(meta.get("year", "")))
+
+    def _save_meta_to_selected(self):
+        sel = self.queue_listbox.curselection()
+        if not sel:
+            return
+        idx = sel[0]
+        self.queue_items[idx]["meta"]["artist"] = self.ent_artist.get().strip() or "Unknown Artist"
+        self.queue_items[idx]["meta"]["title"] = self.ent_title.get().strip() or "Unknown Title"
+        self.queue_items[idx]["meta"]["album"] = self.ent_album.get().strip() or "Dolby Atmos"
+        try:
+            self.queue_items[idx]["meta"]["track"] = int(self.ent_track.get().strip())
+        except ValueError:
+            self.queue_items[idx]["meta"]["track"] = 1
+        self.queue_items[idx]["meta"]["year"] = self.ent_year.get().strip()
+        status = self.queue_items[idx]["status"]
+        p = self.queue_items[idx]["path"]
+        m = self.queue_items[idx]["meta"]
+        self.queue_listbox.delete(idx)
+        self.queue_listbox.insert(idx, f"[{status}] {m['artist']} - {m['title']} ({p.name})")
+
+    # ---------------------------------------------------- PRODUCTION WORKER
+    def _start_processing(self):
+        if not self.queue_items:
+            messagebox.showinfo("Queue Empty", "Please add audio files or a multitrack folder first.")
+            return
+        if self.is_processing:
+            return
+
+        if not (self.var_export_ec3.get() or self.var_export_adm.get() or self.var_export_712.get() or self.var_export_51.get()):
+            messagebox.showwarning("No Format Selected", "Please select at least one output deliverable format.")
+            return
+
+        self.is_processing = True
+        self.cancel_requested = False
+        self.btn_start.config(state=tk.DISABLED, bg=BORDER)
+        self.btn_stop.config(state=tk.NORMAL)
+
+        custom_out = self.var_custom_output.get().strip()
+        custom_out_dir = Path(custom_out) if custom_out else None
+        binaural_matrix = self._get_current_binaural_matrix()
+        overrides = self._compile_overrides()
+
+        threading.Thread(
+            target=self._worker_loop,
+            args=(custom_out_dir, binaural_matrix, overrides),
+            daemon=True
+        ).start()
+
+    def _stop_processing(self):
+        if self.is_processing:
+            self.cancel_requested = True
+            self.btn_stop.config(text="Stopping...", state=tk.DISABLED)
+
+    def _worker_loop(self, custom_out_dir, binaural_matrix, overrides):
+        for idx, item in enumerate(self.queue_items):
+            if self.cancel_requested:
+                break
+            if item["status"] == "Done":
+                continue
+
+            self.current_index = idx
+            item["status"] = "Processing"
+            self.msg_queue.put(("queue_status", (idx, "Processing")))
+
+            def prog_cb(stage, pct, msg):
+                self.msg_queue.put(("progress", (stage, pct, msg)))
+
+            try:
+                force_vocal = self.var_force_vocal_split.get()
+                out_p = self.pipeline.run(
+                    input_file=item["path"],
+                    preset=self.var_preset.get(),
+                    motion_mode=self.var_motion.get(),
+                    motion_intensity=self.var_intensity.get(),
+                    vocal_mode=self.var_vocal_mode.get(),
+                    split_vocals=("on" if (item["path"].is_dir() and force_vocal) else self.var_split.get()),
+                    split_drums=self.var_split_drums.get(),
+                    separation_model=self.var_sep_model.get(),
+                    decorrelate=self.var_decorr.get(),
+                    recover_detail=self.var_detail.get(),
+                    binaural=self.var_binaural.get(),
+                    binaural_matrix=binaural_matrix,
+                    bitrate=self.var_bitrate.get(),
+                    drc=self.var_drc.get(),
+                    output_dir=custom_out_dir,
+                    custom_metadata=item["meta"],
+                    overrides=overrides,
+                    dee_path=(self.var_dee_path.get().strip() or None),
+                    export_adm=self.var_export_adm.get(),
+                    export_ec3=self.var_export_ec3.get(),
+                    export_712=self.var_export_712.get(),
+                    export_51=self.var_export_51.get(),
+                    use_nugen=(self.var_vst3_mode.get() == "Custom VST3 Plugin..." or bool(self.var_vst3_path.get().strip())),
+                    progress_cb=prog_cb
+                )
+                item["status"] = "Done"
+                self.msg_queue.put(("queue_status", (idx, "Done")))
+                self.msg_queue.put(("log", f"SUCCESS: {item['path'].name} -> {out_p}\n"))
+            except Exception as e:
+                item["status"] = "Failed"
+                self.msg_queue.put(("queue_status", (idx, "Failed")))
+                self.msg_queue.put(("log", f"ERROR on {item['path'].name}: {e}\n"))
+
+        self.msg_queue.put(("finished", None))
+
+    def _start_message_pump(self):
+        try:
+            while not self.msg_queue.empty():
+                mtype, data = self.msg_queue.get_nowait()
+                if mtype == "progress":
+                    stage, pct, msg = data
+                    self.lbl_stage.config(text=stage)
+                    self.lbl_percent.config(text=f"{pct:.1f}%")
+                    self.prog_bar["value"] = pct
+                    self.txt_log.insert(tk.END, f"[{stage}] {msg}\n")
+                    self.txt_log.see(tk.END)
+                elif mtype == "log":
+                    self.txt_log.insert(tk.END, data)
+                    self.txt_log.see(tk.END)
+                elif mtype == "queue_status":
+                    idx, status = data
+                    meta = self.queue_items[idx]["meta"]
+                    fname = self.queue_items[idx]["path"].name
+                    self.queue_listbox.delete(idx)
+                    self.queue_listbox.insert(idx, f"[{status}] {meta['artist']} - {meta['title']} ({fname})")
+                elif mtype == "finished":
+                    self.is_processing = False
+                    self.btn_start.config(state=tk.NORMAL, bg=GREEN)
+                    self.btn_stop.config(state=tk.DISABLED, text="Stop")
+                    self.lbl_stage.config(text="Finished")
+                    self.lbl_percent.config(text="100%")
+                    self.prog_bar["value"] = 100
+                    self.txt_log.insert(tk.END, "[Finished] Batch production complete.\n")
+                    self.txt_log.see(tk.END)
+        except Exception:
+            pass
+        finally:
+            self.root.after(80, self._start_message_pump)
 
 
 def main():
-    root = TkinterDnD.Tk() if HAVE_DND else tk.Tk()
-    App(root)
+    if HAVE_DND:
+        root = TkinterDnD.Tk()
+    else:
+        root = tk.Tk()
+    app = ModernAtmosGUI(root)
     root.mainloop()
 
 

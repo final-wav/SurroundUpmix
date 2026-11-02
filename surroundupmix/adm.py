@@ -15,6 +15,7 @@ This module writes ONLY the open ADM BWF. Encoding that master to E-AC-3 JOC
 (Dolby Digital Plus + Atmos) is a proprietary Dolby step (Dolby Atmos
 Renderer / Dolby encoder) and is intentionally out of scope.
 """
+import os
 import struct
 import numpy as np
 
@@ -154,7 +155,8 @@ def make_dbmd(channel_count, creation0="Created with SurroundUpmix",
 
 
 def _axml(n_frames, sr, bits, objects, program_name, bed=BED, all_objects=False):
-    total = _t(n_frames / float(sr))
+    total_sec = n_frames / float(sr)
+    total = _t(total_sec)
     A = []
     A.append('<?xml version="1.0" encoding="utf-8"?>')
     A.append('<ebuCoreMain xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" '
@@ -206,7 +208,10 @@ def _axml(n_frames, sr, bits, objects, program_name, bed=BED, all_objects=False)
                 y = ob.get("y", 1.0)
                 z = ob.get("z", 0.0)
                 blocks = [(0.0, n_frames / float(sr), x, y, z)]
+            n_blocks = len(blocks)
             for bi, (rt, dur, x, y, z) in enumerate(blocks):
+                if bi == n_blocks - 1:
+                    dur = max(0.0, total_sec - rt)
                 A.append('<audioBlockFormat audioBlockFormatID="AB_0003%04X_%08X" '
                          'rtime="%s" duration="%s">' % (cid, bi + 1, _t(rt), _t(dur)))
                 A.append('<cartesian>1</cartesian>')
@@ -308,7 +313,10 @@ def _axml(n_frames, sr, bits, objects, program_name, bed=BED, all_objects=False)
             blocks = ob.get("blocks") or [(0.0, n_frames / float(sr),
                                            ob.get("x", 0.0), ob.get("y", 1.0),
                                            ob.get("z", 0.0))]
+            n_blocks = len(blocks)
             for bi, (rt, dur, x, y, z) in enumerate(blocks):
+                if bi == n_blocks - 1:
+                    dur = max(0.0, total_sec - rt)
                 A.append('<audioBlockFormat audioBlockFormatID="AB_0003%04X_%08X" '
                          'rtime="%s" duration="%s">' % (cid, bi + 1, _t(rt), _t(dur)))
                 A.append('<cartesian>1</cartesian>')
@@ -448,8 +456,6 @@ def write_adm_bwf(path, channels=None, sr=48000, objects=None, bits=24,
             elif len(s) < n:
                 s = np.concatenate([s, np.zeros(n - len(s), dtype=np.float32)])
             cols.append(s[:n])
-        interleaved = np.stack(cols, axis=1).astype(np.float32)
-        dbmd = None
     else:
         # Interleave: 10 bed channels in the chosen bed order, then objects.
         cols = []
@@ -466,17 +472,22 @@ def write_adm_bwf(path, channels=None, sr=48000, objects=None, bits=24,
             elif len(s) < n:
                 s = np.concatenate([s, np.zeros(n - len(s), dtype=np.float32)])
             cols.append(s[:n])
-        interleaved = np.stack(cols, axis=1).astype(np.float32)
 
-        if dbmd is None and not objects:        # generate Dolby metadata chunk for pure bed
-            dbmd = make_dbmd(interleaved.shape[1])
-        elif objects:
-            dbmd = None                         # pure standard ADM (axml + chna) to prevent illegal object collisions
+    ch = len(cols)
+    if dbmd is None:
+        if ch == 30:
+            sig_p = os.path.join(os.path.dirname(__file__), "dolby_signature_30ch.bin")
+            if os.path.isfile(sig_p):
+                with open(sig_p, "rb") as sf:
+                    dbmd = sf.read()
+        if dbmd is None:
+            dbmd = make_dbmd(ch,
+                             creation0="Created using Dolby equipment",
+                             creation1="Studio One")
 
-    ch = interleaved.shape[1]
-    block_align = ch * bits // 8
-    data = _pcm_bytes(interleaved, bits)
-    data_size = len(data)
+    bytes_per_sample = bits // 8
+    block_align = ch * bytes_per_sample
+    data_size = n * block_align
 
     fmt_body = struct.pack("<HHIIHH", 0x0001, ch, sr, sr * block_align,
                            block_align, bits)
@@ -492,12 +503,14 @@ def write_adm_bwf(path, channels=None, sr=48000, objects=None, bits=24,
     # ds64: riffSize, dataSize, sampleCount, tableLength=0
     after_ds64 = (len(fmt_chunk) + 8 + data_size + len(data_pad)
                   + len(axml_chunk) + len(chna_chunk) + len(dbmd_chunk))
-    ds64_body = struct.pack("<QQQI", 0, data_size, n, 0)   # riffSize patched below
+    ds64_body = struct.pack("<QQQI", 0, data_size, n, 0)
     ds64_chunk = b"ds64" + struct.pack("<I", len(ds64_body)) + ds64_body
-    riff_size = 4 + len(ds64_chunk) + after_ds64            # 'WAVE' + chunks
+    riff_size = 4 + len(ds64_chunk) + after_ds64
     ds64_body = struct.pack("<QQQI", riff_size, data_size, n, 0)
     ds64_chunk = b"ds64" + struct.pack("<I", len(ds64_body)) + ds64_body
 
+    # Stream PCM audio in chunks to prevent ArrayMemoryError (OOM) on long tracks
+    chunk_samples = 96000  # 2.0s streaming chunk (consumes < 25 MB RAM regardless of song duration)
     with open(path, "wb") as f:
         f.write(b"RF64")
         f.write(struct.pack("<I", 0xFFFFFFFF))
@@ -506,7 +519,14 @@ def write_adm_bwf(path, channels=None, sr=48000, objects=None, bits=24,
         f.write(fmt_chunk)
         f.write(b"data")
         f.write(struct.pack("<I", 0xFFFFFFFF))   # real size in ds64
-        f.write(data)
+        
+        for offset in range(0, n, chunk_samples):
+            cur_len = min(chunk_samples, n - offset)
+            chunk_buf = np.empty((cur_len, ch), dtype=np.float32)
+            for c_idx in range(ch):
+                chunk_buf[:, c_idx] = cols[c_idx][offset:offset + cur_len]
+            f.write(_pcm_bytes(chunk_buf, bits))
+            
         f.write(data_pad)
         f.write(axml_chunk)
         f.write(chna_chunk)

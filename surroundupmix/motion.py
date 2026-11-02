@@ -224,60 +224,73 @@ def build_dynamic_blocks(data, sr, base_x=0.0, base_y=0.0, base_z=0.0, block_sec
         # -------------------------------------------------------------
 
         if profile == "backing":
-            # Backing Vocals: STRICT HORSESHOE ISOLATION
-            # Lives strictly in the Side Surround <-> Rear Surround arc (Y in [-1.0, 0.0])
-            # Never crosses into the front soundstage (Y > 0.0) so Lead Vocal remains 100% clear.
-            # Stays grounded at ear level (Z in [0.0, 0.05]) for full choral warmth.
-            base_rear_y = min(base_y, -0.40)
-            # Expands from rear corners towards side surrounds on chorus energy
-            y_arch = base_rear_y + (e * 0.40 + ons * 0.20) * eff_intensity
-            y_arch = float(np.clip(y_arch, -1.0, 0.0))  # STRICTLY LEAVE FRONT ALONE (Y <= 0.0)
-            x_arch = base_x * (1.0 + 0.15 * np.sin(ph * 0.5)) + p * 0.25
-            x = float(np.clip(x_arch, -1.0, 1.0))
-            y = y_arch
-            z = float(np.clip(base_z + (e * 0.04) * eff_intensity, 0.0, 0.05))
+            # Standard DSP reference Event-Driven Architecture:
+            # During quiet verses: Stays grounded in side surround pocket (Y in [-0.30, -0.45], Z = 0.0)
+            # When chorus / backing vocal phrase hits (e > 0.10 or ons > 0.04):
+            # JUMPS / SURGES dynamically into the deep rear corners (Y in [-0.85, -1.00])
+            # and SOARS into height canopy (Z in [0.35, 0.65]) for a breathtaking 3D burst!
+            is_active_phrase = (e > 0.08 or ons > 0.04)
+            if is_active_phrase:
+                surge = float(np.clip((e - 0.08) * 1.8 + ons * 0.8, 0.0, 1.0)) * eff_intensity
+                # Jump to rear corners
+                y_target = -0.45 - surge * 0.50
+                # Elevate to height canopy
+                z_target = 0.05 + surge * 0.55
+                # Wide lateral spread
+                x_target = np.sign(base_x) * (0.80 + surge * 0.20) + p * 0.20
+            else:
+                # Quiet / resting pocket
+                y_target = -0.35
+                z_target = 0.0
+                x_target = base_x * 0.85 + p * 0.15
+
+            x = float(np.clip(x_target, -1.0, 1.0))
+            y = float(np.clip(y_target, -1.0, -0.20))  # Strictly behind listener
+            z = float(np.clip(z_target, 0.0, 0.75))
 
         elif profile == "vocal":
-            # Lead Vocal: Solid Front Center anchor on ear level
-            x = base_x + p * 0.12 * eff_intensity
-            y = base_y  # +0.85
-            z = float(np.clip(base_z, 0.0, 0.10))
-            # Subtle pitch elevation only on extreme high-frequency belts
-            if cent > 3000.0 and e > 0.4:
-                z += float(np.clip((cent - 3000.0) / 4000.0, 0.0, 0.08)) * eff_intensity
+            # Standard DSP rule: Lead Vocal is locked Front Center on ear level across the entire song.
+            # Zero rear incursions (Y >= 0.80), Zero ceiling incursions (Z = 0.0). Absolute clarity and punch.
+            x = 0.0 + p * 0.06 * eff_intensity
+            y = 0.85
+            z = 0.0
 
         elif profile == "guitar":
-            # Adaptive Context-Aware Guitar:
-            # - High side ratio (wide acoustic/fingerpicking/delays/chords): settles in rear corners (Y in [-0.85, -0.45])
-            # - High energy / riffing / solo / low side ratio: moves to front/side stage (Y in [-0.20, +0.35])
-            # Stays grounded on ear level (Z in [0.0, 0.15]) to maintain body and crunch.
-            is_wide_acoustic = side_r > 0.35 and e < 0.65
-            if is_wide_acoustic:
-                # Deep rear envelopment
-                target_y = -0.70 + 0.25 * np.cos(ph) * eff_intensity
+            # Event-Driven Guitar:
+            # Steady rhythm sits anchored in front/side stage (Y in [0.0, 0.30], Z = 0.0).
+            # On dynamic solos or ambient arpeggios (high side ratio or high energy), blooms into the room.
+            is_dynamic_event = (side_r > 0.35 and e > 0.15) or (ons > 0.06)
+            if is_dynamic_event:
+                bloom = float(np.clip((e * 0.8 + ons * 0.4), 0.0, 1.0)) * eff_intensity
+                target_y = 0.10 - bloom * 0.70  # Sweeps toward sides/rears
+                target_z = bloom * 0.12
+                x_pos = base_x * (1.0 + bloom * 0.2) + p * 0.30
             else:
-                # Front & side stage presence
-                target_y = -0.20 + (e * 0.45 + ons * 0.25) * eff_intensity + 0.15 * np.cos(ph)
+                target_y = 0.25
+                target_z = 0.0
+                x_pos = base_x + p * 0.20
 
-            x_drift = base_x + 0.25 * np.sin(ph) * eff_intensity + p * 0.35
-            x = float(np.clip(x_drift, -1.0, 1.0))
-            y = float(np.clip(target_y, -0.85, 0.35))
-            z = float(np.clip(base_z + (e * 0.08) * eff_intensity, 0.0, 0.15))
+            x = float(np.clip(x_pos, -1.0, 1.0))
+            y = float(np.clip(target_y, -0.75, 0.40))
+            z = float(np.clip(target_z, 0.0, 0.14))
 
         elif profile == "keys":
-            # Adaptive Context-Aware Keys / Synths:
-            # - Wide pads & ambient arpeggios: rear/side envelopment (Y in [-0.75, -0.20])
-            # - Solos / lead keys: front/side stage (Y in [-0.10, +0.30])
-            # Stays grounded on ear level (Z in [0.0, 0.15])
-            if side_r > 0.35 and e < 0.60:
-                target_y = -0.60 + 0.30 * np.sin(ph * 0.7) * eff_intensity
+            # Event-Driven Keys / Synths:
+            # Ambient pads rest in side stage; on chorus/drop swells expand to rear/ceiling
+            is_swell = (e > 0.20 or ons > 0.05)
+            if is_swell:
+                swell_amt = float(np.clip(e * 1.2 + ons * 0.5, 0.0, 1.0)) * eff_intensity
+                target_y = -0.10 - swell_amt * 0.65
+                target_z = swell_amt * 0.45
+                x_pos = base_x * (1.0 + swell_amt * 0.15) + p * 0.25
             else:
-                target_y = -0.15 + 0.35 * (e + ons) * eff_intensity + 0.15 * np.sin(ph * 0.7)
+                target_y = 0.15
+                target_z = 0.0
+                x_pos = base_x + p * 0.15
 
-            x_drift = base_x + 0.25 * np.cos(ph) * eff_intensity + p * 0.35
-            x = float(np.clip(x_drift, -1.0, 1.0))
-            y = float(np.clip(target_y, -0.75, 0.30))
-            z = float(np.clip(base_z + (e * 0.08) * eff_intensity, 0.0, 0.15))
+            x = float(np.clip(x_pos, -1.0, 1.0))
+            y = float(np.clip(target_y, -0.80, 0.35))
+            z = float(np.clip(target_z, 0.0, 0.50))
 
         elif profile == "fx":
             # Ear Candy / FX: DSP-Driven Horseshoe Sweeps & Fly-Bys

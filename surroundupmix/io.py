@@ -39,7 +39,8 @@ class Stereo:
 # stem names Demucs may produce (4-stem and 6-stem models), plus our split extras
 # and the recovered separation residual (original - sum of stems)
 STEM_NAMES = ("bass", "drums", "vocals", "other", "guitar", "piano",
-              "backing", "vocals_full", "residual")
+              "backing", "vocals_full", "residual",
+              "kick", "snare", "cymbals", "toms", "drums_full")
 
 
 def find_stem(folder, name):
@@ -63,26 +64,46 @@ def load(path):
     return Stereo(data, sr)
 
 
+def _add_stereo_signals(st1, st2):
+    max_len = max(len(st1), len(st2))
+    d1 = st1.data
+    d2 = st2.data
+    if len(d1) < max_len:
+        d1 = np.pad(d1, ((0, max_len - len(d1)), (0, 0)))
+    if len(d2) < max_len:
+        d2 = np.pad(d2, ((0, max_len - len(d2)), (0, 0)))
+    return Stereo(d1 + d2, st1.sr)
+
+
 def _load_stems_by_name(folder):
     """Fallback for descriptive filenames (e.g. '... Drums Left.wav'): match the
-    instrument word in each name, pairing Left/Right mono files into one stereo
-    stem. Returns {canonical: Stereo}."""
+    instrument word in each name, pairing Left/Right mono files into stereo stems,
+    and summing multiple layer tracks (e.g. drum1, drum2, drum3 -> drums).
+    Returns {canonical: Stereo}."""
     from .stemnames import folder_stem_map
     found = {}
     for canon, items in folder_stem_map(folder).items():
         full = [p for c, p in items if c is None]
         left = [p for c, p in items if c == "L"]
         right = [p for c, p in items if c == "R"]
-        if full:
-            found[canon] = load(full[0])
-        elif left and right:
-            sl, sr_ = load(left[0]), load(right[0])
+        st = None
+        for p in full:
+            loaded = load(p)
+            st = loaded if st is None else _add_stereo_signals(st, loaded)
+        pairs = min(len(left), len(right))
+        for i in range(pairs):
+            sl, sr_ = load(left[i]), load(right[i])
             k = min(len(sl), len(sr_))
-            found[canon] = Stereo(np.stack([sl.L[:k], sr_.L[:k]], axis=1), sl.sr)
-        elif left:
-            found[canon] = load(left[0])
-        elif right:
-            found[canon] = load(right[0])
+            pair_st = Stereo(np.stack([sl.L[:k], sr_.L[:k]], axis=1), sl.sr)
+            st = pair_st if st is None else _add_stereo_signals(st, pair_st)
+        for p in left[pairs:]:
+            loaded = load(p)
+            st = loaded if st is None else _add_stereo_signals(st, loaded)
+        for p in right[pairs:]:
+            loaded = load(p)
+            st = loaded if st is None else _add_stereo_signals(st, loaded)
+        if st is not None:
+            found[canon] = st
     return found
 
 
@@ -108,6 +129,11 @@ def load_stems(folder):
     if len(srs) > 1:
         raise ValueError("stems disagree on sample rate: %s" % sorted(srs))
     sr = srs.pop()
+    if any(k in found for k in ("kick", "snare", "cymbals", "toms")):
+        if "drums" in found and "drums_full" not in found:
+            found["drums_full"] = found["drums"]
+        found.pop("drums", None)
+
     n = max(len(s) for s in found.values())
     for name, s in list(found.items()):
         if len(s) < n:

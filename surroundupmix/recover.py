@@ -21,7 +21,7 @@ from scipy.signal import correlate
 
 # the raw Demucs stems whose sum should approximate the master (NOT the karaoke
 # split's lead/backing/vocals_full, which would double-count the vocal)
-RAW_STEMS = ("bass", "drums", "vocals", "other", "guitar", "piano")
+RAW_STEMS = ("bass", "drums", "vocals", "other", "guitar", "piano", "kick", "snare", "cymbals", "toms")
 
 
 def _load(path, sr):
@@ -50,8 +50,15 @@ def compute_residual(stems_dir, original_path, min_atten_db=9.0):
     encoder delay), NOT recoverable detail - reinjecting it would add noise, so
     we refuse. Lossless masters (FLAC/WAV) pass cleanly (~ -15..-20 dB); a source
     the stems don't line up with is rejected (returns None)."""
-    stem_files = [p for p in glob.glob(os.path.join(stems_dir, "*.flac"))
-                  if os.path.splitext(os.path.basename(p))[0].lower() in RAW_STEMS]
+    found_map = {os.path.splitext(os.path.basename(p))[0].lower(): p
+                 for p in glob.glob(os.path.join(stems_dir, "*.flac"))}
+    has_subdrums = any(k in found_map for k in ("kick", "snare", "cymbals", "toms"))
+    stem_files = []
+    for k, p in found_map.items():
+        if k == "drums" and has_subdrums:
+            continue
+        if k in RAW_STEMS:
+            stem_files.append(p)
     if not stem_files or not os.path.isfile(original_path):
         return None, None
     sr = sf.info(stem_files[0]).samplerate
