@@ -3,6 +3,13 @@
 2. 360° Circular Orbit (4s - 9s): Fast stereo ping-pong sweeps curve into a full 360° circle around the head.
 3. Pitch-to-Elevation (9s - 14s): High shimmering chimes (6 kHz) elevate towards the ceiling.
 """
+
+import os
+import sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import os
 import numpy as np
 import soundfile as sf

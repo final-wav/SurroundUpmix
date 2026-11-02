@@ -6,6 +6,13 @@
 The stems folder holds bass/drums/vocals/other (+ optional guitar/piano, and
 backing/vocals_full from a karaoke split) as .flac or .wav.
 """
+
+import os
+import sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import argparse
 import sys
 

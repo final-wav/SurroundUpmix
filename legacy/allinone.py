@@ -7,6 +7,13 @@ Requires Demucs (`pip install demucs`) on the machine. The optional lead/backing
 karaoke split uses split_vocals.py (audio-separator); point --split-python at the
 interpreter that has it (e.g. the isolated splitter venv on Windows).
 """
+
+import os
+import sys
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
+
 import argparse
 import os
 import shutil

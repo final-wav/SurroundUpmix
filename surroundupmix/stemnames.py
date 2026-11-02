@@ -26,12 +26,16 @@ AUDIO_EXTS = (".flac", ".wav", ".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wma")
 # canonical -> keyword patterns (word-boundary). Order only matters for 'backing',
 # which is checked first so "backing vocals" doesn't read as "vocals".
 _KW = {
-    "vocals": [r"lead\s*vocals?", r"\bvocals?\b", r"\bvox\b", r"\bvoice\b"],
-    "drums":  [r"\bdrums?\b", r"\bpercussion\b", r"\bperc\b"],
+    "vocals": [r"lead\s*vocals?", r"\bvocals?\d*\b", r"\bvox\d*\b", r"\bvoice\d*\b", r"\bchorus\b"],
+    "drums":  [r"\bdrums?\d*\b", r"\bpercussion\b", r"\bperc\b", r"\bbeat\b"],
+    "kick":   [r"\bkicks?\d*\b", r"\bbombo\b", r"\bbd\b"],
+    "snare":  [r"\bsnares?\d*\b", r"\bredoblante\b", r"\bsd\b"],
+    "cymbals":[r"\bcymbals?\d*\b", r"\bplatillos\b", r"\bhi\s*hats?\b", r"\bhh\b", r"\boverheads?\b", r"\boh\b", r"\bride\b", r"\bcrash\b"],
+    "toms":   [r"\btoms?\d*\b"],
     "bass":   [r"bass\s*guitar", r"\bbassline\b", r"\bbass\b"],
-    "guitar": [r"\bguitars?\b", r"\bgtr\b"],
-    "piano":  [r"\bpiano\b", r"\bkeys?\b", r"\bkeyboard\b"],
-    "other":  [r"\bother\b", r"\binstrumental\b", r"\binstruments?\b", r"\bsynths?\b"],
+    "guitar": [r"\bguitars?\d*\b", r"\bgtr\d*\b", r"\bacoustic\b", r"\belectric\b"],
+    "piano":  [r"\bpiano\b", r"\bkeys?\b", r"\bkeyboard\b", r"\borgan\b"],
+    "other":  [r"\bother\b", r"\binstrumental\b", r"\binstruments?\b", r"\bsynths?\b", r"\bstrings?\b", r"\bpad\b", r"\brass\b", r"\bhorns?\b"],
 }
 _BACKING = [r"backing\s*vocals?", r"\bbgv\b", r"\bback\s*vox\b", r"\bharmon(?:y|ies)\b"]
 
@@ -39,7 +43,7 @@ _BACKING = [r"backing\s*vocals?", r"\bbgv\b", r"\bback\s*vox\b", r"\bharmon(?:y|
 def parse_stem_filename(fname):
     """Return (canonical | None, channel 'L'/'R'/None) for one filename."""
     s = os.path.splitext(os.path.basename(fname))[0].lower()
-    s = s.replace("_", " ").replace("-", " ")
+    s = s.replace("_", " ").replace("-", " ").replace("+", " ")
 
     channel = None
     if re.search(r"\bright\b", s) or re.search(r"\br\s*$", s):

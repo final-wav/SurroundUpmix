@@ -16,8 +16,12 @@
 
 # --- third-party binaries + the split venv + models (download/install separately, see README) ---
 /bin/
+/apps/
 
 # --- generated output + working folders ---
+output/
+temp/
+config.json
 Final_5.1/
 Final_7.1/
 Final_7.1.2/
@@ -25,10 +29,13 @@ SurroundUpmix_work/
 Demo_Moving_Objects/
 testsongs/
 _*/
+*.log
 
 # --- python ---
 __pycache__/
 *.pyc
+.venv/
+venv/
 
 # --- local / editor / session ---
 .claude/
